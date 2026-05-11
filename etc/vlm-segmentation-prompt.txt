@@ -1,0 +1,34 @@
+TASK: categorize the image of this journal page and extract information according to the type
+
+PAGE CATEGORIES:
+- table_of_contents
+- article_title_start  << prefer this when a page has a visible article title + authors
+- article_body_text
+- abstracts: compact summaries of article titles
+- correspondence_letters
+- list_of_references
+- other (cover, ads, imprint, product information, pharmaceutical prescription, clinical information sheet, jobs, blank, reviews)
+
+ALWAYS FOLLOW THE RULES:
+- if the page contains any article title with authors, it is category article_title_start, NOT article_body_text
+- article_title_start does not need to represent a full article, just needs authors
+- article_title_start needs a distinct and clearly visible title
+- if the title just starts with a bigger capital letter but has no clear title block, it is NOT article_title_start
+- table of contents may have section headings; use the real article titles and their page numbers
+- if it is a table of contents, extract all listed article titles and their page numbers
+- use "n/a" if page number is not available
+- if the page contains manufacturer AND product information, it's likely to be an ad (category: other)
+
+JSON OUTPUT FORMAT (output only JSON, no markdown fences, no commentary):
+{
+  "category": "<one of the categories above>",
+  "page": "<printed page number visible on this page, or null>",
+  "articles": [
+    {"title": "<article title>", "authors": "<author names as printed>", "doi": "<doi or null>", "printed_page": "<printed page number or null>"}
+  ],
+  "table_of_contents": [
+    {"title": "<article title>", "page": "<printed page number>"}
+  ]
+}
+
+Use an empty array [] for "articles" and "table_of_contents" when not applicable.
