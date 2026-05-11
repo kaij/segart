@@ -34,6 +34,9 @@ Your tasks:
 - Output entries in ascending pdf_page order.
 - If multiple ARTICLES entries map to the same printed page (e.g. a page with two
   short letters), keep all of them with their individual pdf_page values.
+- For "printed_page": when a TOC entry is matched, copy its "page" value (e.g. "55").
+  If no TOC match, or the TOC page is "n/a", use the ARTICLES "printed_page" if
+  available. Otherwise null.
 
 Output a JSON array only — no markdown fences, no commentary, no extra keys:
 
@@ -43,7 +46,8 @@ Output a JSON array only — no markdown fences, no commentary, no extra keys:
     "title": "<best title string>",
     "authors": [{"name": "<First Last>"}],
     "type": "article",
-    "doi": "<doi string or null>"
+    "doi": "<doi string or null>",
+    "printed_page": "<printed page number string, or null>"
   }
 ]
 

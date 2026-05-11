@@ -265,7 +265,7 @@ def process_pages(pages, prompt_text, client, model, item_dir, verbose=False):
 
 def collect_toc_and_articles(page_results):
     """Split page results into TOC entries and article-start records."""
-    toc_entries = []
+    toc_entries = []   # each entry temporarily carries "_pdf_page"
     article_starts = []
 
     for res in page_results:
@@ -275,25 +275,49 @@ def collect_toc_and_articles(page_results):
         if category == "table_of_contents":
             for entry in res.get("table_of_contents") or []:
                 if entry.get("title"):
-                    toc_entries.append(
-                        {
-                            "title": entry["title"],
-                            "page": entry.get("page") or "n/a",
-                        }
-                    )
+                    toc_entries.append({
+                        "title": entry["title"],
+                        "page": entry.get("page") or "n/a",
+                        "_pdf_page": pdf_page,
+                    })
 
         if category == "article_title_start":
             for art in res.get("articles") or []:
                 if art.get("title"):
-                    article_starts.append(
-                        {
-                            "pdf_page": pdf_page,
-                            "title": art["title"],
-                            "authors": art.get("authors"),
-                            "doi": art.get("doi"),
-                            "printed_page": art.get("printed_page") or res.get("page"),
-                        }
-                    )
+                    article_starts.append({
+                        "pdf_page": pdf_page,
+                        "title": art["title"],
+                        "authors": art.get("authors"),
+                        "doi": art.get("doi"),
+                        "printed_page": art.get("printed_page") or res.get("page"),
+                    })
+
+    def _has_real_page(e):
+        p = (e.get("page") or "").strip().lower()
+        return p not in ("", "n/a")
+
+    # Step 1 — batch filter: if any TOC PDF page has real page numbers, drop
+    # pages whose entire batch is "n/a" (these are condensed summary TOCs that
+    # repeat titles with abbreviated text and no page numbers).
+    batches: dict[int, list] = {}
+    for e in toc_entries:
+        batches.setdefault(e["_pdf_page"], []).append(e)
+    paged_pdf_pages = {pp for pp, grp in batches.items() if any(_has_real_page(e) for e in grp)}
+    if paged_pdf_pages:
+        toc_entries = [e for e in toc_entries if e["_pdf_page"] in paged_pdf_pages]
+
+    # Step 2 — exact-title dedup: keep paged copy when the same normalised
+    # title appears on more than one surviving TOC page.
+    by_title: dict[str, list] = {}
+    for e in toc_entries:
+        key = re.sub(r"\s+", " ", e["title"]).strip().lower()
+        by_title.setdefault(key, []).append(e)
+    deduped = []
+    for group in by_title.values():
+        with_page = [e for e in group if _has_real_page(e)]
+        deduped.extend(with_page if with_page else group[:1])
+
+    toc_entries = [{k: v for k, v in e.items() if k != "_pdf_page"} for e in deduped]
 
     return toc_entries, article_starts
 
@@ -380,7 +404,7 @@ def _parse_authors_string(authors_raw):
 # ---------------------------------------------------------------------------
 
 
-def build_toc(matched_entries, leaf_to_page, leaf_count, item):
+def build_toc(matched_entries, leaf_to_page, leaf_count, item, vlm_pp_map=None):
     # Sort by pdf_page; deduplicate on (pdf_page, title).
     seen = set()
     deduped = []
@@ -401,6 +425,10 @@ def build_toc(matched_entries, leaf_to_page, leaf_count, item):
             end_leaf = start_leaf
 
         start_pp = leaf_to_page.get(start_leaf)
+        if start_pp is None:
+            # Fallback 1: printed_page from matcher output (sourced from TOC entry)
+            # Fallback 2: printed_page VLM-extracted from the article-start page
+            start_pp = e.get("printed_page") or (vlm_pp_map.get(e["pdf_page"]) if vlm_pp_map else None)
         end_pp = leaf_to_page.get(end_leaf)
         if start_pp is None and end_pp is None:
             printed_pages = None
@@ -570,7 +598,12 @@ def main():
     )
     print(f"  matcher produced {len(matched)} entries", file=sys.stderr)
 
-    toc = build_toc(matched, leaf_to_page, leaf_count, args.item)
+    vlm_pp_map = {
+        a["pdf_page"]: a["printed_page"]
+        for a in article_starts
+        if a.get("printed_page")
+    }
+    toc = build_toc(matched, leaf_to_page, leaf_count, args.item, vlm_pp_map=vlm_pp_map)
 
     out = args.output or f"{args.item}_toc.json"
     with open(out, "w") as fh:
