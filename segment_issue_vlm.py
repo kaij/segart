@@ -24,6 +24,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +38,25 @@ DEFAULT_MAX_DIM = 1200
 DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
 
 _SCRIPT_DIR = Path(__file__).parent
+
+_USE_COLOR = sys.stderr.isatty()
+
+_CAT_COLOR = {
+    "article_title_start": "1;32",  # bold green
+    "table_of_contents": "1;36",  # bold cyan
+    "article_body_text": "2",  # dim
+    "abstracts": "34",  # blue
+    "correspondence_letters": "34",  # blue
+    "list_of_references": "2",  # dim
+    "chapter": "33",  # yellow
+    "other": "2;33",  # dim yellow
+}
+
+
+def _cat_str(cat):
+    code = _CAT_COLOR.get(cat, "1;31")  # bold red for unknown/error
+    text = f"{cat:<25}"
+    return f"\033[{code}m{text}\033[0m" if _USE_COLOR else text
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +175,17 @@ def _strip_json_fences(text):
     return text.strip()
 
 
+def _model_slug(model):
+    return re.sub(r"[^a-zA-Z0-9_.-]", "_", model)
+
+
 def _make_client(api_base_url, api_key):
     from openai import OpenAI
 
     return OpenAI(base_url=api_base_url, api_key=api_key or "no-key")
 
 
-def call_vlm(image_path, prompt_text, client, model, verbose=False):
+def call_vlm(image_path, prompt_text, client, model, tier="flex", verbose=False):
     """Send one page image to the VLM; return parsed JSON dict."""
     with open(image_path, "rb") as fh:
         b64 = base64.b64encode(fh.read()).decode()
@@ -181,12 +206,26 @@ def call_vlm(image_path, prompt_text, client, model, verbose=False):
                     ],
                 }
             ],
-            max_tokens=1024,
+            max_tokens=8192,
+            service_tier=tier,
+            extra_body={"think": "false", "include_usage": True},
         )
+        _cost = getattr(getattr(resp, "usage", None), "cost", None)
         raw = resp.choices[0].message.content or ""
         if verbose:
             print(f"    raw response: {raw[:200]!r}", file=sys.stderr)
-        return json.loads(_strip_json_fences(raw))
+        if not raw.strip():
+            print("  WARN: VLM returned empty response", file=sys.stderr)
+            return {
+                "category": "unknown",
+                "error": "empty_response",
+                "articles": [],
+                "table_of_contents": [],
+            }
+        data = json.loads(_strip_json_fences(raw))
+        if _cost is not None:
+            data["_cost"] = _cost
+        return data
     except json.JSONDecodeError as e:
         print(f"  WARN: JSON parse error: {e}", file=sys.stderr)
         print(f"  WARN: raw response was: {raw!r}", file=sys.stderr)
@@ -209,50 +248,102 @@ def call_vlm(image_path, prompt_text, client, model, verbose=False):
         }
 
 
-def process_pages(pages, prompt_text, client, model, item_dir, verbose=False):
+def process_pages(
+    pages, prompt_text, client, model, item_dir, workers=1, tier="flex", verbose=False
+):
     """Call VLM for every page; cache per-page JSON; return all results."""
-    vlm_dir = item_dir / "vlm_pages"
+    vlm_dir = item_dir / f"vlm_pages_{_model_slug(model)}"
     vlm_dir.mkdir(parents=True, exist_ok=True)
-    results = []
-    errors = 0
-    for pdf_page, jpg_path in pages:
+    lock = threading.Lock()
+    _cancelled = threading.Event()
+    n = len(pages)
+
+    def _one(pdf_page, jpg_path):
+        if _cancelled.is_set():
+            return {
+                "pdf_page": pdf_page,
+                "category": "unknown",
+                "error": "cancelled",
+                "articles": [],
+                "table_of_contents": [],
+            }
         cache = vlm_dir / f"page_{pdf_page:04d}_vlm.json"
         if cache.exists():
             data = json.loads(cache.read_text())
-            if verbose:
-                cat = data.get("category", "?")
-                err = data.get("error")
-                suffix = f" [cached, ERROR: {err}]" if err else f" [cached, {cat}]"
-                print(f"  page {pdf_page}{suffix}", file=sys.stderr)
-        else:
-            print(
-                f"  VLM page {pdf_page}/{len(pages)} ({jpg_path.name}) …",
-                file=sys.stderr,
-                flush=True,
-            )
-            data = call_vlm(jpg_path, prompt_text, client, model, verbose=verbose)
-            data["pdf_page"] = pdf_page
-            if data.get("error"):
-                errors += 1
-                # Don't cache errors — allow a re-run to retry failed pages.
+            cat = data.get("category", "unknown")
+            pp = data.get("page") or ""
+            with lock:
                 if verbose:
+                    err = data.get("error")
+                    suffix = f" [cached, ERROR: {err}]" if err else f" [cached, {cat}]"
+                    print(f"  page {pdf_page}{suffix}", file=sys.stderr)
+                else:
                     print(
-                        f"    not caching error result for page {pdf_page}",
+                        f"  page {pdf_page:3d}/{n}  {_cat_str(cat)}  {pp}  [cached]",
                         file=sys.stderr,
                     )
-            else:
-                cache.write_text(json.dumps(data, indent=2))
+                    if cat == "article_title_start":
+                        for art in data.get("articles", []):
+                            title = art.get("title", "")
+                            if title:
+                                print(f"       ↳ {title}", file=sys.stderr)
+        else:
+            if workers == 1:
+                print(
+                    f"  page {pdf_page:3d}/{n} …", end="", flush=True, file=sys.stderr
+                )
+            data = call_vlm(jpg_path, prompt_text, client, model, tier=tier, verbose=verbose)
+            data["pdf_page"] = pdf_page
             cat = data.get("category", "unknown")
+            pp = data.get("page") or ""
             err = data.get("error")
-            if err:
-                print(f"    → ERROR: {err}", file=sys.stderr)
-            elif verbose:
-                print(f"    → {cat}", file=sys.stderr)
+            prefix = "\r" if workers == 1 else ""
+            with lock:
+                if err:
+                    print(
+                        f"{prefix}  page {pdf_page:3d}/{n}  {_cat_str('unknown')}  ERROR: {err}",
+                        file=sys.stderr,
+                    )
+                    if verbose:
+                        print(
+                            f"    not caching error result for page {pdf_page}",
+                            file=sys.stderr,
+                        )
+                else:
+                    cache.write_text(json.dumps(data, indent=2))
+                    print(
+                        f"{prefix}  page {pdf_page:3d}/{n}  {_cat_str(cat)}  {pp}",
+                        file=sys.stderr,
+                    )
+                    if not verbose and cat == "article_title_start":
+                        for art in data.get("articles", []):
+                            title = art.get("title", "")
+                            if title:
+                                print(f"       ↳ {title}", file=sys.stderr)
+                if verbose:
+                    print(f"    → {cat}", file=sys.stderr)
         data.setdefault("pdf_page", pdf_page)
-        results.append(data)
+        return data
+
+    results_map = {}
+    executor = ThreadPoolExecutor(max_workers=workers)
+    futures = {executor.submit(_one, pp, jp): pp for pp, jp in pages}
+    try:
+        for fut in as_completed(futures):
+            data = fut.result()
+            results_map[data["pdf_page"]] = data
+        executor.shutdown(wait=True)
+    except KeyboardInterrupt:
+        _cancelled.set()
+        executor.shutdown(wait=False, cancel_futures=True)
+        print("\n  interrupted", file=sys.stderr)
+        raise
+
+    results = [results_map[pp] for pp, _ in pages]
+    errors = sum(1 for d in results if d.get("error"))
     if errors:
         print(
-            f"  WARN: {errors}/{len(pages)} pages returned errors (re-run to retry)",
+            f"  WARN: {errors}/{n} pages returned errors (re-run to retry)",
             file=sys.stderr,
         )
     return results
@@ -466,6 +557,18 @@ def main():
         help=f"Max image dimension in pixels (default {DEFAULT_MAX_DIM})",
     )
     p.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Parallel VLM API requests for continuous batching (default 4)",
+    )
+    p.add_argument(
+        "--tier",
+        default="flex",
+        choices=["standard", "flex", "priority"],
+        help="OpenAI service tier for VLM requests (default flex)",
+    )
+    p.add_argument(
         "--api-base-url",
         default=os.environ.get("VLM_API_BASE_URL", "https://openrouter.ai/api/v1"),
     )
@@ -481,6 +584,16 @@ def main():
     p.add_argument(
         "--matcher-model",
         help="LLM model for TOC matching step (default: same as --model)",
+    )
+    p.add_argument(
+        "--matcher-api-base-url",
+        default=None,
+        help="API base URL for matcher LLM (default: same as --api-base-url)",
+    )
+    p.add_argument(
+        "--matcher-api-key",
+        default=None,
+        help="API key for matcher LLM (default: same as --api-key)",
     )
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args()
@@ -531,12 +644,31 @@ def main():
 
     vlm_prompt = (_SCRIPT_DIR / "etc" / "vlm-segmentation-prompt.txt").read_text()
     client = _make_client(args.api_base_url, args.api_key)
+    matcher_client = _make_client(
+        args.matcher_api_base_url or args.api_base_url,
+        args.matcher_api_key or args.api_key,
+    )
     page_results = process_pages(
-        pages, vlm_prompt, client, args.model, item_dir, args.verbose
+        pages,
+        vlm_prompt,
+        client,
+        args.model,
+        item_dir,
+        workers=args.workers,
+        tier=args.tier,
+        verbose=args.verbose,
     )
 
+    costs = [d["_cost"] for d in page_results if d.get("_cost") is not None]
+    if costs:
+        print(
+            f"  VLM cost: ${sum(costs):.4f}"
+            f"  ({len(costs)}/{len(page_results)} pages reported cost)",
+            file=sys.stderr,
+        )
+
     # Write aggregated debug dump
-    all_out = item_dir / f"{args.item}_vlm_all.json"
+    all_out = item_dir / f"{args.item}_{_model_slug(args.model)}_vlm_all.json"
     all_out.write_text(
         json.dumps(
             {
@@ -566,7 +698,7 @@ def main():
 
     matcher_template = (_SCRIPT_DIR / "etc" / "llm-toc-matcher.txt").read_text()
     matched = match_with_llm(
-        toc_entries, article_starts, matcher_template, client, matcher_model
+        toc_entries, article_starts, matcher_template, matcher_client, matcher_model
     )
     print(f"  matcher produced {len(matched)} entries", file=sys.stderr)
 
