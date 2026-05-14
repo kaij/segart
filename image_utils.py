@@ -11,18 +11,52 @@ def clamp_image_to_max_dim(img: Image.Image, max_dim: int) -> Image.Image:
     return img.resize((max(1, int(round(w * scale))), max(1, int(round(h * scale)))), Image.LANCZOS)
 
 
-def crop_scanner_border(img: Image.Image, tolerance: int = 15) -> Image.Image:
-    """Detect border color from corners (median), crop to content bounding box."""
+def crop_scanner_border(img: Image.Image, tolerance: int = 30, fuzz: float = 0.3) -> Image.Image:
+    """Crop to content by scanning inward until paper color is reached.
+
+    Finds the dominant bright pixel (paper/background) from the histogram,
+    then scans inward from each edge until a column/row has >= fuzz fraction
+    of pixels within tolerance of that paper color. Stops at midpoint to
+    prevent over-cropping fully dark images.
+    """
     gray = img.convert("L")
+    px = list(gray.getdata())
     w, h = gray.size
-    sample = max(5, min(w, h) // 30)
-    corner_pixels: list[int] = []
-    for box in [(0, 0, sample, sample), (w - sample, 0, w, sample), (0, h - sample, sample, h), (w - sample, h - sample, w, h)]:
-        corner_pixels.extend(gray.crop(box).getdata())
-    border_color = sorted(corner_pixels)[len(corner_pixels) // 2]
-    mask = gray.point(lambda p: 255 if abs(p - border_color) > tolerance else 0)
-    bbox = mask.getbbox()
-    return img.crop(bbox) if bbox else img
+
+    hist = gray.histogram()
+    paper_color = max(range(120, 256), key=lambda v: hist[v])
+
+    def _col(x):
+        return [px[y * w + x] for y in range(h)]
+
+    def _row(y):
+        return px[y * w: (y + 1) * w]
+
+    def _has_paper_col(x):
+        return sum(1 for p in _col(x) if abs(p - paper_color) <= tolerance) / h >= fuzz
+
+    def _has_paper_row(y):
+        return sum(1 for p in _row(y) if abs(p - paper_color) <= tolerance) / w >= fuzz
+
+    left = 0
+    while left < w // 2 and not _has_paper_col(left):
+        left += 1
+
+    right = w - 1
+    while right > w // 2 and not _has_paper_col(right):
+        right -= 1
+
+    top = 0
+    while top < h // 2 and not _has_paper_row(top):
+        top += 1
+
+    bottom = h - 1
+    while bottom > h // 2 and not _has_paper_row(bottom):
+        bottom -= 1
+
+    if left == 0 and top == 0 and right == w - 1 and bottom == h - 1:
+        return img
+    return img.crop((left, top, right + 1, bottom + 1))
 
 
 def optimize_microfilm(img: Image.Image, max_dim: int = 1200) -> Image.Image:
