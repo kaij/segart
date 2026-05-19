@@ -1,6 +1,6 @@
 # QA Review: heurxref Pilot Batch
 
-Generated 2026-05-13 08:28 — **149** items published, **57** entries flagged across **45** items.
+Generated 2026-05-14 08:53 — **149** items published, **77** entries flagged across **58** items.
 
 ## Flag breakdown
 
@@ -109,6 +109,33 @@ Item: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention
   - Multiple Crossref entries share this start page-index. Each kept at 1 page; verify whether boundaries should differ.  
   - view: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1994-02_26_1/page/n132/mode/1up?admin=1
 
+### `sim_accident-analysis-and-prevention_1996-01_28_1`
+Item: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1996-01_28_1?admin=1
+
+- **e16** — _Forthcoming papersibing injury events_  
+  - position: `n0` to `n0` (printed pp. [['I', 'I']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1996-01_28_1/page/n0/mode/1up?admin=1
+
+### `sim_accident-analysis-and-prevention_1996-07_28_4_0`
+Item: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1996-07_28_4_0?admin=1
+
+- **e18** — _Fact page—A new feature in AAP lights for reducing vehicle crashes in the United States_  
+  - position: `n0` to `n3` (printed pp. [['III', 'III']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1996-07_28_4_0/page/n0/mode/1up?admin=1
+
+### `sim_accident-analysis-and-prevention_1997-07_29_4`
+Item: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1997-07_29_4?admin=1
+
+- **e18** — _Announcement_  
+  - position: `n0` to `n7` (printed pp. [['III', 'III']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1997-07_29_4/page/n0/mode/1up?admin=1
+
 ### `sim_accident-analysis-and-prevention_1999-09_31_5`
 Item: https://www-drini.archive.org/details/sim_accident-analysis-and-prevention_1999-09_31_5?admin=1
 
@@ -204,6 +231,11 @@ Item: https://www-drini.archive.org/details/sim_applied-acoustics_2010-07_71_7?a
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-07_71_7/page/n103/mode/1up?admin=1
+- **e14** — _Editorial Board_  
+  - position: `n0` to `n3` (printed pp. [['IFC', 'IFC']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-07_71_7/page/n0/mode/1up?admin=1
 
 ### `sim_applied-acoustics_2010-11_71_11`
 Item: https://www-drini.archive.org/details/sim_applied-acoustics_2010-11_71_11?admin=1
@@ -213,6 +245,11 @@ Item: https://www-drini.archive.org/details/sim_applied-acoustics_2010-11_71_11?
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-11_71_11/page/n128/mode/1up?admin=1
+- **e19** — _Editorial Board_  
+  - position: `n0` to `n5` (printed pp. [['IFC', 'IFC']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-11_71_11/page/n0/mode/1up?admin=1
 
 ### `sim_applied-acoustics_2010-12_71_12`
 Item: https://www-drini.archive.org/details/sim_applied-acoustics_2010-12_71_12?admin=1
@@ -222,6 +259,11 @@ Item: https://www-drini.archive.org/details/sim_applied-acoustics_2010-12_71_12?
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-12_71_12/page/n108/mode/1up?admin=1
+- **e14** — _Editorial Board_  
+  - position: `n0` to `n3` (printed pp. [['IFC', 'IFC']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_applied-acoustics_2010-12_71_12/page/n0/mode/1up?admin=1
 
 ### `sim_applied-acoustics_applied-acoustics_2013-01_74_1`
 Item: https://www-drini.archive.org/details/sim_applied-acoustics_applied-acoustics_2013-01_74_1?admin=1
@@ -254,6 +296,11 @@ Item: https://www-drini.archive.org/details/sim_applied-geochemistry_2005-06_20_
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_applied-geochemistry_2005-06_20_6/page/n196/mode/1up?admin=1
+- **e16** — _IAGC Membership Form_  
+  - position: `n0` to `n4` (printed pp. [['II', 'II']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_applied-geochemistry_2005-06_20_6/page/n0/mode/1up?admin=1
 
 ### `sim_applied-geochemistry_2006-09_21_9`
 Item: https://www-drini.archive.org/details/sim_applied-geochemistry_2006-09_21_9?admin=1
@@ -263,6 +310,11 @@ Item: https://www-drini.archive.org/details/sim_applied-geochemistry_2006-09_21_
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_applied-geochemistry_2006-09_21_9/page/n178/mode/1up?admin=1
+- **e12** — _IAGC Membership Application Form_  
+  - position: `n0` to `n4` (printed pp. [['II', 'II']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_applied-geochemistry_2006-09_21_9/page/n0/mode/1up?admin=1
 
 ### `sim_arts-in-psychotherapy_1996_23_2_0`
 Item: https://www-drini.archive.org/details/sim_arts-in-psychotherapy_1996_23_2_0?admin=1
@@ -313,6 +365,15 @@ Item: https://www-drini.archive.org/details/sim_arts-in-psychotherapy_the-arts-i
   - flag: **co-located** (confidence 0.4)  
   - Multiple Crossref entries share this start page-index. Each kept at 1 page; verify whether boundaries should differ.  
   - view: https://www-drini.archive.org/details/sim_arts-in-psychotherapy_the-arts-in-psychotherapy_2013-09_40_4/page/n6/mode/1up?admin=1
+
+### `sim_biological-conservation_2001-08_100_2`
+Item: https://www-drini.archive.org/details/sim_biological-conservation_2001-08_100_2?admin=1
+
+- **e10** — _Ecosystem Management: Lessons from Around the World — A Guide for Development and Conservation Practitioners_  
+  - position: `n0` to `n3` (printed pp. [['269', '269']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_biological-conservation_2001-08_100_2/page/n0/mode/1up?admin=1
 
 ### `sim_biological-conservation_2004-11_120_1_0`
 Item: https://www-drini.archive.org/details/sim_biological-conservation_2004-11_120_1_0?admin=1
@@ -422,6 +483,92 @@ Item: https://www-drini.archive.org/details/sim_clinical-journal-of-sport-medici
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_clinical-journal-of-sport-medicine_1999-07_9_3/page/n83/mode/1up?admin=1
 
+### `sim_clinics-in-chest-medicine_2010-09_31_3`
+Item: https://www-drini.archive.org/details/sim_clinics-in-chest-medicine_2010-09_31_3?admin=1
+
+- **e19** — _Contents_  
+  - position: `n0` to `n3` (printed pp. [['vii', 'x']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-chest-medicine_2010-09_31_3/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-chest-medicine_2010-12_31_4`
+Item: https://www-drini.archive.org/details/sim_clinics-in-chest-medicine_2010-12_31_4?admin=1
+
+- **e18** — _Contents_  
+  - position: `n0` to `n3` (printed pp. [['v', 'viii']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-chest-medicine_2010-12_31_4/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-perinatology_2010-03_37_1`
+Item: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-03_37_1?admin=1
+
+- **e22** — _CME Accreditation Page and Author Disclosure_  
+  - position: `n0` to `n3` (printed pp. [['xiii', 'xiii']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-03_37_1/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-perinatology_2010-06_37_2`
+Item: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-06_37_2?admin=1
+
+- **e16** — _CME Accreditation Page and Author Disclosure_  
+  - position: `n0` to `n5` (printed pp. [['ix', 'ix']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-06_37_2/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-perinatology_2010-09_37_3`
+Item: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-09_37_3?admin=1
+
+- **e16** — _CME Accreditation Page and Author Disclosures_  
+  - position: `n0` to `n3` (printed pp. [['ix', 'ix']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-09_37_3/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-perinatology_2010-12_37_4`
+Item: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-12_37_4?admin=1
+
+- **e20** — _CME Accreditation Page and Author Disclosure_  
+  - position: `n0` to `n3` (printed pp. [['xiii', 'xiii']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-12_37_4/page/n0/mode/1up?admin=1
+- **e21** — _Contents_  
+  - position: `n0` to `n3` (printed pp. [['vii', 'xi']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-perinatology_2010-12_37_4/page/n0/mode/1up?admin=1
+
+### `sim_clinics-in-sports-medicine_2000-04_19_2`
+Item: https://www-drini.archive.org/details/sim_clinics-in-sports-medicine_2000-04_19_2?admin=1
+
+- **e17** — _Editorial Board_  
+  - position: `n0` to `n11` (printed pp. [['iii', 'v']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_clinics-in-sports-medicine_2000-04_19_2/page/n0/mode/1up?admin=1
+
+### `sim_european-journal-of-personality_1987-09_1_3`
+Item: https://www-drini.archive.org/details/sim_european-journal-of-personality_1987-09_1_3?admin=1
+
+- **e6** — _Masthead_  
+  - position: `n0` to `n3` (printed pp. [['fmi', 'fmi']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_european-journal-of-personality_1987-09_1_3/page/n0/mode/1up?admin=1
+
+### `sim_hand-clinics_1992-02_8_1`
+Item: https://www-drini.archive.org/details/sim_hand-clinics_1992-02_8_1?admin=1
+
+- **e19** — _Title Page_  
+  - position: `n0` to `n1` (printed pp. [['i', 'i']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_hand-clinics_1992-02_8_1/page/n0/mode/1up?admin=1
+
 ### `sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6`
 Item: https://www-drini.archive.org/details/sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6?admin=1
 
@@ -480,6 +627,11 @@ Item: https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-0
   - flag: **extended-to-end** (confidence 0.4)  
   - Last entry whose Crossref deposit was a single start page; span extended to end of visible pages (may over-claim trailing backmatter).  
   - view: https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-04_23_2/page/n110/mode/1up?admin=1
+- **e20** — _Masthead_  
+  - position: `n0` to `n5` (printed pp. [['fmi', 'fmi']])  
+  - flag: **other** (confidence 0.15)  
+  - frontmatter_positional_default  
+  - view: https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-04_23_2/page/n0/mode/1up?admin=1
 
 ## All published items
 
