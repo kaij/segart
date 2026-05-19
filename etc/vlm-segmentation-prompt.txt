@@ -20,6 +20,7 @@ ALWAYS FOLLOW THE RULES:
 - use "n/a" if page number is not available
 - if the page contains manufacturer AND product information, it's likely to be an ad (category: other)
 - if an article page just contains title and author, classify it as "chapter"
+- ignore headers and footers of the page (these are not article_title_start)
 
 JSON OUTPUT FORMAT (output only JSON, no markdown fences, no commentary):
 {

@@ -206,7 +206,7 @@ def call_vlm(image_path, prompt_text, client, model, tier="flex", verbose=False)
                     ],
                 }
             ],
-            max_tokens=8192,
+            max_tokens=1024,
             service_tier=tier,
             extra_body={"think": "false", "include_usage": True},
         )
@@ -292,7 +292,9 @@ def process_pages(
                 print(
                     f"  page {pdf_page:3d}/{n} …", end="", flush=True, file=sys.stderr
                 )
-            data = call_vlm(jpg_path, prompt_text, client, model, tier=tier, verbose=verbose)
+            data = call_vlm(
+                jpg_path, prompt_text, client, model, tier=tier, verbose=verbose
+            )
             data["pdf_page"] = pdf_page
             cat = data.get("category", "unknown")
             pp = data.get("page") or ""
@@ -417,10 +419,11 @@ def match_with_llm(toc_entries, article_starts, matcher_template, client, model)
         "<toc>", json.dumps(toc_entries, indent=2)
     ).replace("<articles>", json.dumps(article_starts, indent=2))
     try:
+        n_entries = len(article_starts)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4096,
+            max_tokens=max(4096, n_entries * 300),
         )
         raw = resp.choices[0].message.content or ""
         entries = json.loads(_strip_json_fences(raw))
