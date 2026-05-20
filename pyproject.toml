@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic",
-    "docling",
+    "docling>=2.94.0",
     "openai",
     "pillow",
     "pydantic",
