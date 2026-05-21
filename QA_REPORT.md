@@ -2,6 +2,15 @@
 
 Generated 2026-05-14 08:53 — **149** items published, **77** entries flagged across **58** items.
 
+## Status as of 2026-05-21
+
+The flagged-entries content below is from the 2026-05-14 heurxref-pilot QA run. Two later sections document subsequent work:
+
+- **Buggy-cache fix — 2026-05-20/21** ([jump](#buggy-cache-fix--2026-05-20--21)): 24 pilot items re-published from the full year-level Crossref cache.
+- **v2 cutover — 2026-05-21** ([jump](#v2-cutover--2026-05-21)): hard v1→v2 schema cutover for every published `_articles.json.gz` on IA (935 items = 911 articles_pilot + 24 heur_xref-fix). 935/935 ok.
+
+Total IA periodical items with segart `_articles.json.gz` as of this write: **1,060** (149 heurxref pilot + 911 articles_pilot, all overlapping with the v2 rebuild). 125 heurxref pilot items not in the buggy-24 set are still at v1; queued for a follow-up batch.
+
 ## Flag breakdown
 
 - **co-located**: 26 — multiple Crossref entries share a start page-index AND title (typically end-of-issue announcements, repeated-title book reviews, or front-matter pairs).
