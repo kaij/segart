@@ -786,3 +786,38 @@ Item: https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-0
 - https://www-drini.archive.org/details/sim_psychiatry_1956-08_19_3_0?admin=1
 - https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-04_23_2?admin=1
 - https://www-drini.archive.org/details/sim_rural-special-education-quarterly_fall-2012_31_3?admin=1
+
+## Buggy-cache fix — 2026-05-20 / 21
+
+A per-issue Crossref cache truncation bug caused 24 items in the pilot batch above to be published with incomplete TOCs (some articles missing). Diagnosed via `tmp/audit/suspect_items_from_bug_cache.json`; cross-validated by `tmp/audit/additional_suspects.json` (125 matches, 0 mismatches outside the 24).
+
+Fix: re-ran `heur_xref` against the year-level full Crossref cache (`tools/rerun_with_full_cache.py`) and re-published all three artifacts atomically per [[per_item_toc_review_provenance]] — `_toc.json` + `_articles.json.gz` + IA review — via `tools/regen_buggy_24.py`. Pilot of 1 ran 2026-05-20; batch of remaining 23 ran 2026-05-21 (4 workers).
+
+Result: **24/24 ok**, full per-item record in `tmp/audit/regen_buggy_24_results.json`. Prior versions preserved on IA at `history/files/*.~N~`. New review on each item: _"TOC corrected: regenerated from full Crossref data (prior version had articles missing due to a cache-truncation bug)."_
+
+Items re-published (toc/articles entry count after fix):
+
+- [sim_american-journal-of-sports-medicine_march-april-1989_17_2](https://archive.org/details/sim_american-journal-of-sports-medicine_march-april-1989_17_2?admin=1) — 27
+- [sim_biological-conservation_2001-08_100_2](https://archive.org/details/sim_biological-conservation_2001-08_100_2?admin=1) — 12
+- [sim_biological-conservation_2003-08_112_3](https://archive.org/details/sim_biological-conservation_2003-08_112_3?admin=1) — 18
+- [sim_biological-conservation_2004-06_117_5](https://archive.org/details/sim_biological-conservation_2004-06_117_5?admin=1) — 12
+- [sim_biological-conservation_2004-08_118_5](https://archive.org/details/sim_biological-conservation_2004-08_118_5?admin=1) — 15
+- [sim_biological-conservation_2004-11_120_1_0](https://archive.org/details/sim_biological-conservation_2004-11_120_1_0?admin=1) — 20
+- [sim_biological-conservation_2010-01_143_1](https://archive.org/details/sim_biological-conservation_2010-01_143_1?admin=1) — 37
+- [sim_biological-conservation_2010-02_143_2](https://archive.org/details/sim_biological-conservation_2010-02_143_2?admin=1) — 31
+- [sim_biological-conservation_2010-03_143_3](https://archive.org/details/sim_biological-conservation_2010-03_143_3?admin=1) — 35
+- [sim_biological-conservation_2010-04_143_4](https://archive.org/details/sim_biological-conservation_2010-04_143_4?admin=1) — 31
+- [sim_biological-conservation_2010-05_143_5](https://archive.org/details/sim_biological-conservation_2010-05_143_5?admin=1) — 37
+- [sim_biological-conservation_2010-07_143_7](https://archive.org/details/sim_biological-conservation_2010-07_143_7?admin=1) — 34
+- [sim_biological-conservation_2010-08_143_8](https://archive.org/details/sim_biological-conservation_2010-08_143_8?admin=1) — 13
+- [sim_biological-conservation_2010-09_143_9](https://archive.org/details/sim_biological-conservation_2010-09_143_9?admin=1) — 37
+- [sim_biological-conservation_2010-10_143_10](https://archive.org/details/sim_biological-conservation_2010-10_143_10?admin=1) — 17
+- [sim_biological-conservation_2010-11_143_11](https://archive.org/details/sim_biological-conservation_2010-11_143_11?admin=1) — 53 (pilot, 2026-05-20)
+- [sim_biological-conservation_2010-12_143_12](https://archive.org/details/sim_biological-conservation_2010-12_143_12?admin=1) — 12
+- [sim_biological-conservation_biological-conservation_2013-06_162](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-06_162?admin=1) — 14
+- [sim_biological-conservation_biological-conservation_2013-07_163](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-07_163?admin=1) — 12
+- [sim_biological-conservation_biological-conservation_2013-10_166](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-10_166?admin=1) — 34
+- [sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6](https://archive.org/details/sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6?admin=1) — 21
+- [sim_marine-biology_1991-02_108_1](https://archive.org/details/sim_marine-biology_1991-02_108_1?admin=1) — 22
+- [sim_personality-and-individual-differences_2002-04-05_32_5_0](https://archive.org/details/sim_personality-and-individual-differences_2002-04-05_32_5_0?admin=1) — 15
+- [sim_physician-and-sportsmedicine_1983-03_11_3](https://archive.org/details/sim_physician-and-sportsmedicine_1983-03_11_3?admin=1) — 26
