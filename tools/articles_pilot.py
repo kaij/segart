@@ -23,19 +23,23 @@ from segart_version import software_versions  # noqa
 
 # ---------------------------------------------------------------- caches/fetch
 CACHE_ROOT = SEGART / "tmp"
-FULL_CACHE = CACHE_ROOT / "crossref_full_cache"
+# v2: separate cache dir so we don't read v1's type-filtered caches.
+# v1's `crossref_full_cache/` (type:journal-article only) stays untouched.
+FULL_CACHE = CACHE_ROOT / "crossref_full_cache_v2"
 FATCAT_CACHE = CACHE_ROOT / "fatcat_doi_cache"
 FATCAT_FILES_CACHE = CACHE_ROOT / "fatcat_files_cache"
 OPENALEX_CACHE = CACHE_ROOT / "openalex_doi_cache"
 UNPAYWALL_CACHE = CACHE_ROOT / "unpaywall_doi_cache"
 PUBMED_CACHE = CACHE_ROOT / "pubmed_doi_cache"
 EMAIL = "brewster@archive.org"
-HEADERS = {"User-Agent": f"segart-articles/1.0 (mailto:{EMAIL})"}
-PERIODICAL_FIELDS = {"container-title","short-container-title","ISSN",
-                     "issn-type","publisher","member","prefix","source"}
+HEADERS = {"User-Agent": f"segart-articles/1.1 (mailto:{EMAIL})"}
 
 
 def fetch_crossref_full_for_year(issn, year):
+    """v2: no type filter — pull every DOI Crossref has for the (issn, year)
+    including journal-issue, journal-volume, editorial, review-article,
+    book-review, book-chapter, proceedings-article, errata, etc. Caller
+    routes records by `type`."""
     safe = re.sub(r"[^A-Za-z0-9-]", "_", issn)
     p = FULL_CACHE / f"{safe}_{year}.json"
     if p.exists():
@@ -48,7 +52,8 @@ def fetch_crossref_full_for_year(issn, year):
     while True:
         qs = urllib.parse.urlencode({
             "rows": 200,
-            "filter": f"type:journal-article,from-pub-date:{year}-01,until-pub-date:{year}-12",
+            # v2: filter on date range only; no `type:` constraint.
+            "filter": f"from-pub-date:{year}-01,until-pub-date:{year}-12",
             "cursor": cursor, "mailto": EMAIL})
         url = f"https://api.crossref.org/journals/{issn}/works?{qs}"
         req = urllib.request.Request(url, headers=HEADERS)
@@ -69,13 +74,10 @@ def fetch_crossref_full_for_year(issn, year):
     # don't race on the rename.
     p_tmp = p.with_suffix(f".json.tmp.{uuid.uuid4().hex}")
     p_tmp.write_text(json.dumps(
-        {"items": items, "error": error, "paginated": True, "pages": pages}))
+        {"items": items, "error": error, "paginated": True, "pages": pages,
+         "type_filter": None}))
     p_tmp.replace(p)
     return items, error
-
-
-def strip_periodical(rec):
-    return {k: v for k, v in rec.items() if k not in PERIODICAL_FIELDS}
 
 
 def _doi_cache_get(cache_dir, doi, url):
@@ -199,6 +201,68 @@ def ia_metadata(item):
     except Exception: return None
 
 
+def _pick_title(rec):
+    """Multi-source title pick: prefer Crossref, fall back to OpenAlex, then
+    PubMed. Returns None if no source has a title."""
+    cr = rec.get("crossref") or {}
+    t = cr.get("title")
+    if isinstance(t, list) and t:
+        return t[0]
+    if isinstance(t, str) and t:
+        return t
+    oa = rec.get("openalex") or {}
+    t = oa.get("title") or oa.get("display_name")
+    if t: return t
+    pm = rec.get("pubmed") or {}
+    return pm.get("title")
+
+
+def _pick_abstract(rec):
+    """Multi-source abstract pick: prefer Crossref's raw JATS, fall back to
+    OpenAlex's inverted-index reconstruction, then PubMed's structured form.
+    Raw JATS preserved (no transform). Returns None if none available."""
+    cr = rec.get("crossref") or {}
+    a = cr.get("abstract")
+    if a: return a
+    oa = rec.get("openalex") or {}
+    inv = oa.get("abstract_inverted_index")
+    if inv:
+        # Reconstruct plain text from OpenAlex inverted index: {word: [positions]}.
+        pairs = [(pos, w) for w, ps in inv.items() for pos in (ps or [])]
+        pairs.sort()
+        return " ".join(w for _, w in pairs)
+    pm = rec.get("pubmed") or {}
+    return pm.get("abstract") or pm.get("structured_abstract")
+
+
+def _is_retracted(rec):
+    """Crossref's update-to[] non-empty OR update-policy set both signal
+    that the record has been revised/retracted/corrected. Only `update-to`
+    with type=='retraction' is a true retraction; we surface the broader
+    'has-been-updated' signal here and let consumers refine."""
+    cr = rec.get("crossref") or {}
+    updates = cr.get("update-to") or []
+    for u in updates:
+        if (u.get("type") or "").lower() == "retraction":
+            return True
+    return False
+
+
+def _add_convenience_fields(rec):
+    """v2: populate entry top-level convenience fields from source blobs.
+    Originals stay in their source blobs unchanged — these are copies/picks
+    surfaced for direct access. Mutates rec in place."""
+    cr = rec.get("crossref") or {}
+    oa = rec.get("openalex") or {}
+    rec["entry_type"] = cr.get("type")
+    rec["title"] = _pick_title(rec)
+    rec["abstract"] = _pick_abstract(rec)
+    rec["subjects"] = cr.get("subject") or []
+    rec["topics"] = oa.get("topics") or []
+    rec["concepts"] = oa.get("concepts") or []
+    rec["retracted"] = _is_retracted(rec)
+
+
 def derive_metadata(md):
     """Pull (issn, vol, iss, yr) from IA metadata."""
     m = md.get("metadata", {}) if md else {}
@@ -240,20 +304,43 @@ def process_item(item):
                     and (not iss or str(w.get("issue","")) == str(iss))]
     if not issue_works:
         out["status"] = "skip_no_crossref_articles"; return out
-    out["n_articles"] = len(issue_works)
+
+    # v2: separate records by Crossref `type`. journal-issue / journal-volume
+    # records hold issue/volume-level metadata (special-issue title, editors,
+    # subjects); they are NOT articles, so they go to top-level blocks rather
+    # than `entries`.
+    issue_meta = None
+    volume_meta = None
+    article_works = []
+    for w in issue_works:
+        t = w.get("type")
+        if t == "journal-issue" and issue_meta is None:
+            issue_meta = w
+        elif t == "journal-volume" and volume_meta is None:
+            volume_meta = w
+        else:
+            article_works.append(w)
+
+    if not article_works and issue_meta is None and volume_meta is None:
+        out["status"] = "skip_no_crossref_articles"; return out
+    out["n_articles"] = len(article_works)
 
     # Fetch other sources for each DOI; ANY permanent error → skip item
     entries = {}
     src_hits = {"crossref":0,"fatcat":0,"openalex":0,"unpaywall":0,"pubmed":0}
-    for i, w in enumerate(issue_works):
+    n_retracted = 0
+    for i, w in enumerate(article_works):
         doi = w.get("DOI")
         if not doi: continue
         eid = f"e{i+1}"
+        # v2: full Crossref blob — no strip_periodical. The 8 periodical
+        # fields (container-title, ISSN, publisher, member, prefix, ...)
+        # are kept so a pub_*-level aggregator can recover them later.
         rec = {"toc_entry_id": eid,
                "ext_ids": {"doi": doi},
                "match_method": "doi_from_crossref",
                "match_confidence": 1.0,
-               "crossref": strip_periodical(w)}
+               "crossref": w}
         src_hits["crossref"] += 1
         for sname, fn in (("fatcat", fetch_fatcat_by_doi),
                           ("openalex", fetch_openalex_by_doi),
@@ -266,19 +353,33 @@ def process_item(item):
             if data:
                 rec[sname] = data
                 src_hits[sname] += 1
+
+        # v2 convenience fields: derived/picked from the source blobs and
+        # surfaced at entry top level for direct consumer access. Originals
+        # remain in their source blobs unchanged.
+        _add_convenience_fields(rec)
+        if rec.get("retracted"):
+            n_retracted += 1
         entries[eid] = rec
 
-    if not entries:
+    if not entries and issue_meta is None and volume_meta is None:
         out["status"] = "skip_no_entries_built"; return out
 
     today = time.strftime("%Y-%m-%d")
     sources_used = {s: {"via": SOURCE_VIA[s], "fetched_at": today}
                      for s, n in src_hits.items() if n > 0}
+    # Crossref always present (we filtered on its output). Record the
+    # v2 broadened scope explicitly.
+    if "crossref" in sources_used:
+        sources_used["crossref"]["type_filter"] = None
     licenses = {s: SOURCE_LICENSE[s] for s in sources_used}
     companion = {
-        "schema_version": 1,
+        "schema_version": 2,
         "ia_item": item,
         "toc_schema_version": None,
+        "issue_meta": issue_meta,
+        "volume_meta": volume_meta,
+        "has_retracted_entries": n_retracted > 0,
         "provenance": {
             "software_versions": software_versions(),
             "sources": sources_used,
