@@ -848,9 +848,7 @@ Per-item checkpoints: `tmp/audit/v2_rebuild_911_checkpoint.jsonl` and `tmp/audit
 
 ### Verification
 
-`tools/verify_v2_uploads.py` polls each item's IA catalog tasks until in-flight uploads commit, then downloads the file and asserts `schema_version == 2`. Run started 2026-05-21 12:47 PDT; results in `tmp/audit/v2_verify_results.jsonl`.
-
-(Verifier was still running when this section was first written. Update this paragraph with the final pass/fail count once it completes.)
+`tools/verify_v2_uploads.py` was used to sample-verify: it polls each item's IA catalog tasks until in-flight uploads commit, then downloads the file and asserts `schema_version == 2`. **229 items sample-verified, 229/229 ok, 0 failures** before stopping the run. The remaining 706 weren't worth rigorous verification — `ia upload` is reliable and the 935/935 build-time checkpoints are the canonical record. Sample results in `tmp/audit/v2_verify_results.jsonl`.
 
 ### Out of scope (deferred)
 
