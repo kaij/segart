@@ -43,49 +43,90 @@ EMAIL = "brewster@archive.org"
 HEADERS = {"User-Agent": f"segart-articles/1.1 (mailto:{EMAIL})"}
 
 
-def fetch_crossref_full_for_year(issn, year):
+def fetch_crossref_full_for_year(issn, year, max_retries=6):
     """v2: no type filter — pull every DOI Crossref has for the (issn, year)
     including journal-issue, journal-volume, editorial, review-article,
     book-review, book-chapter, proceedings-article, errata, etc. Caller
-    routes records by `type`."""
+    routes records by `type`.
+
+    Strict mode (this is archival ETL — see memory note
+    [never_overwrite_good_data_with_bad]):
+      - On 429/503 mid-pagination: retry with backoff honoring Retry-After
+      - On network/SSL/timeout: retry with exponential backoff
+      - On permanent 4xx/5xx: raise immediately
+      - On post-retry transient: raise
+      - NEVER caches a partial-or-errored fetch — old good data preserved
+    """
     safe = re.sub(r"[^A-Za-z0-9-]", "_", issn)
     p = FULL_CACHE / f"{safe}_{year}.json"
     if p.exists():
         try:
             d = json.loads(p.read_text())
-            return d.get("items", []), d.get("error")
-        except Exception: pass
-    items, error = [], None
-    cursor = "*"; pages = 0
+            # v2 cache always has type_filter:null + populated items. If we
+            # see an error or empty result with no error context, treat as
+            # cache-miss and refetch — never trust a stale-bad entry.
+            if not d.get("error") and "items" in d:
+                return d["items"], None
+        except Exception:
+            pass  # corrupted; refetch
+
+    items = []
+    cursor = "*"
+    pages = 0
     while True:
         qs = urllib.parse.urlencode({
             "rows": 200,
-            # v2: filter on date range only; no `type:` constraint.
             "filter": f"from-pub-date:{year}-01,until-pub-date:{year}-12",
             "cursor": cursor, "mailto": EMAIL})
         url = f"https://api.crossref.org/journals/{issn}/works?{qs}"
-        req = urllib.request.Request(url, headers=HEADERS)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as fh:
-                data = json.load(fh)
-        except Exception as e:
-            error = str(e); break
-        msg = data.get("message", {})
+
+        # Per-page retry loop with strict-mode error handling.
+        last_err = None
+        page_data = None
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=60) as fh:
+                    page_data = json.load(fh)
+                break  # success
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 503):
+                    ra = e.headers.get("Retry-After")
+                    delay = _parse_retry_after(ra) if ra else min(5 * (2 ** attempt), 120)
+                    last_err = f"HTTP {e.code} (attempt {attempt+1}/{max_retries}, Retry-After={ra!r})"
+                    print(f"  backoff {delay}s: {last_err}  {issn} {year} cursor={cursor[:8]}",
+                          file=sys.stderr)
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                        continue
+                    raise RuntimeError(f"{last_err} — gave up on {url}")
+                # Permanent 4xx/5xx — raise immediately, do NOT cache.
+                raise RuntimeError(f"HTTP {e.code} (permanent) on {url}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                last_err = f"{type(e).__name__}: {e} (attempt {attempt+1}/{max_retries})"
+                delay = min(5 * (2 ** attempt), 120) * (0.5 + random.random())
+                print(f"  backoff {delay:.1f}s: {last_err}  {issn} {year}", file=sys.stderr)
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"{last_err} — gave up on {url}")
+
+        msg = page_data.get("message", {})
         page_items = msg.get("items", [])
         items.extend(page_items); pages += 1
         nc = msg.get("next-cursor")
         if not page_items or not nc or nc == cursor: break
         cursor = nc
         if pages >= 50: break
+
+    # Only reach here on success. Cache + return.
     FULL_CACHE.mkdir(parents=True, exist_ok=True)
-    # Per-worker tmp filename so concurrent writers to the same (issn,year)
-    # don't race on the rename.
     p_tmp = p.with_suffix(f".json.tmp.{uuid.uuid4().hex}")
     p_tmp.write_text(json.dumps(
-        {"items": items, "error": error, "paginated": True, "pages": pages,
+        {"items": items, "paginated": True, "pages": pages,
          "type_filter": None}))
     p_tmp.replace(p)
-    return items, error
+    return items, None
 
 
 def _parse_retry_after(value):

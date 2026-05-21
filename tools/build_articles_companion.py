@@ -53,46 +53,77 @@ EMAIL = "brewster@archive.org"
 HEADERS = {"User-Agent": f"segart-articles/1.1 (mailto:{EMAIL})"}
 
 
-def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None]:
+def fetch_crossref_full_for_year(issn: str, year: str,
+                                  max_retries: int = 6) -> tuple[list, str | None]:
     """v2: pull EVERY DOI Crossref has for (issn, year) — no type filter.
     Cursor-paginated so prolific journal-years aren't truncated. File-cached
     by (issn, year) under tmp/crossref_full_cache_v2/.
 
-    Distinct from the audit cache (tmp/crossref_journal_year_cache/) — the
-    audit used select=DOI,title,page,volume,issue,author to keep its cache
-    small. The articles file needs the rest of each record (abstract,
-    references, funder, license, dates, ...).
+    Strict mode (archival ETL — see memory note
+    [never_overwrite_good_data_with_bad]):
+      - On 429/503 mid-pagination: retry with backoff honoring Retry-After
+      - On network/SSL/timeout: retry with exponential backoff
+      - On permanent 4xx/5xx: raise immediately
+      - On post-retry transient: raise
+      - NEVER caches partial-or-errored fetches
     """
+    import random as _r
     safe = re.sub(r"[^A-Za-z0-9-]", "_", issn)
     p = FULL_CACHE / f"{safe}_{year}.json"
     if p.exists():
         try:
             d = json.loads(p.read_text())
-            return d.get("items", []), d.get("error")
+            # Trust cache only if it's a clean v2 entry. Stale-bad entries
+            # (with `error` field from the pre-strict code) get refetched.
+            if not d.get("error") and "items" in d:
+                return d["items"], None
         except Exception:
             pass  # corrupted; refetch
 
-    items, error = [], None
+    items = []
     cursor = "*"
     pages_fetched = 0
     while True:
         qs = urllib.parse.urlencode({
             "rows": 200,
-            # v2: filter on date range only; no `type:` constraint.
             "filter": (f"from-pub-date:{year}-01,"
                        f"until-pub-date:{year}-12"),
             "cursor": cursor,
             "mailto": EMAIL,
-            # NB: no `select=` — we want everything Crossref has
         })
         url = f"https://api.crossref.org/journals/{issn}/works?{qs}"
-        req = urllib.request.Request(url, headers=HEADERS)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as fh:
-                data = json.load(fh)
-        except Exception as e:
-            error = str(e); break
-        msg = data.get("message", {})
+
+        last_err = None
+        page_data = None
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=60) as fh:
+                    page_data = json.load(fh)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 503):
+                    ra = e.headers.get("Retry-After")
+                    delay = _parse_retry_after(ra) if ra else min(5 * (2 ** attempt), 120)
+                    last_err = f"HTTP {e.code} (attempt {attempt+1}/{max_retries}, Retry-After={ra!r})"
+                    print(f"  backoff {delay}s: {last_err}  {issn} {year}",
+                          file=sys.stderr)
+                    if attempt < max_retries - 1:
+                        time.sleep(delay)
+                        continue
+                    raise RuntimeError(f"{last_err} — gave up on {url}")
+                raise RuntimeError(f"HTTP {e.code} (permanent) on {url}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+                last_err = f"{type(e).__name__}: {e} (attempt {attempt+1}/{max_retries})"
+                delay = min(5 * (2 ** attempt), 120) * (0.5 + _r.random())
+                print(f"  backoff {delay:.1f}s: {last_err}  {issn} {year}",
+                      file=sys.stderr)
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"{last_err} — gave up on {url}")
+
+        msg = page_data.get("message", {})
         page_items = msg.get("items", [])
         items.extend(page_items)
         pages_fetched += 1
@@ -100,16 +131,17 @@ def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None
         if not page_items or not next_cursor or next_cursor == cursor:
             break
         cursor = next_cursor
-        if pages_fetched >= 50:  # safety cap
+        if pages_fetched >= 50:
             break
 
+    # Only reach here on success.
     FULL_CACHE.mkdir(parents=True, exist_ok=True)
     p_tmp = p.with_suffix(".json.tmp")
-    p_tmp.write_text(json.dumps({"items": items, "error": error,
+    p_tmp.write_text(json.dumps({"items": items,
                                   "paginated": True, "pages": pages_fetched,
                                   "type_filter": None}))
     p_tmp.replace(p)
-    return items, error
+    return items, None
 
 
 def _parse_retry_after(value):
