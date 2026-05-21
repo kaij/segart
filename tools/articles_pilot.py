@@ -400,6 +400,10 @@ def derive_metadata(md):
     return issn, vol, iss, yr
 
 
+# Read at the start of each process_item call; set once by main() from --force.
+FORCE_REBUILD = False
+
+
 def article_already_uploaded(md, item):
     files = {f.get("name") for f in (md.get("files") or [])}
     return f"{item}_articles.json.gz" in files
@@ -411,7 +415,7 @@ def process_item(item):
     md = ia_metadata(item)
     if not md:
         out["status"] = "ia_metadata_fail"; return out
-    if article_already_uploaded(md, item):
+    if not FORCE_REBUILD and article_already_uploaded(md, item):
         out["status"] = "skip_already_uploaded"; out["ok"] = True; return out
     issn, vol, iss, yr = derive_metadata(md)
     if not (issn and yr):
@@ -560,7 +564,17 @@ def main():
                     help="cap on number of items processed (for pilot)")
     ap.add_argument("--checkpoint", default=None,
                     help="JSONL with per-item statuses; resumable")
+    ap.add_argument("--force", action="store_true",
+                    help="Rebuild + re-upload even if an _articles.json.gz "
+                         "already exists on IA (e.g. for the v1→v2 cutover).")
     args = ap.parse_args()
+
+    # Module-level so process_item (run inside futures) can read it.
+    global FORCE_REBUILD
+    FORCE_REBUILD = args.force
+    if args.force:
+        print("FORCE_REBUILD: ignoring existing _articles.json.gz on IA",
+              flush=True)
 
     items = [l.strip() for l in open(args.items_file) if l.strip()]
     if args.limit: items = items[:args.limit]
