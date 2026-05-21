@@ -821,3 +821,47 @@ Items re-published (toc/articles entry count after fix):
 - [sim_marine-biology_1991-02_108_1](https://archive.org/details/sim_marine-biology_1991-02_108_1?admin=1) — 22
 - [sim_personality-and-individual-differences_2002-04-05_32_5_0](https://archive.org/details/sim_personality-and-individual-differences_2002-04-05_32_5_0?admin=1) — 15
 - [sim_physician-and-sportsmedicine_1983-03_11_3](https://archive.org/details/sim_physician-and-sportsmedicine_1983-03_11_3?admin=1) — 26
+
+## v2 cutover — 2026-05-21
+
+The published `_articles.json.gz` schema bumped from v1 to v2 today, replacing every existing v1 file on IA. See [`docs/articles_format.md`](docs/articles_format.md) for the full schema.
+
+### What v2 adds over v1
+
+- Drops the `type:journal-article` fetch filter — captures `journal-issue`, `journal-volume`, editorials, book-reviews, errata, proceedings-articles, book-chapters, and every other DOI Crossref has for the (issn, vol, iss). The first non-article record of type `journal-issue` is routed to a top-level `issue_meta` block; `journal-volume` to `volume_meta`.
+- Drops `strip_periodical()` — every per-article Crossref record keeps `container-title`, `short-container-title`, `ISSN`, `issn-type`, `publisher`, `member`, `prefix`, `source` (the journal-level fields can now be aggregated to `pub_*` collection items — see issue #1).
+- Adds top-level `has_retracted_entries` boolean.
+- Adds per-entry convenience fields (derived from source blobs for direct access): `entry_type`, `title`, `abstract` (raw JATS, never transformed), `subjects`, `topics`, `concepts`, `retracted`.
+- Adds Pass A enrichments per entry: `crossmark` (derivation from Crossref's update-policy/update-to/assertion fields), `funders_expanded` (per funder DOI via `/funders/{doi}`), `relations_expanded` (one-hop traversal of `crossref.relation` via `/works/{doi}`). Event Data was in scope but Crossref sunset the API on 2026-04-23 (see issue #8) — `event_data` slot reserved in the schema for when the historical archive lands.
+- Strict-mode source fetches: any 429/503 retries with backoff honoring `Retry-After`; permanent 4xx/5xx or post-retry failure raises and fails the item build (no silent best-effort).
+- Bumps `segart_version` to `1.1.0`.
+
+### Scope and result
+
+| Pipeline | Items | Result |
+|---|---|---|
+| `articles_pilot.py --force` (data-first, no TOC) | 911 | **911/911 ok**, 0 failures, wall time ~9.8 min |
+| `regen_buggy_24.py` (TOC-driven via `build_articles_companion`) | 24 | **24/24 ok**, 0 failures |
+| **Total v2 rebuild** | **935** | **935/935 ok** |
+
+Per-item checkpoints: `tmp/audit/v2_rebuild_911_checkpoint.jsonl` and `tmp/audit/regen_buggy_24_results.json`.
+
+### Verification
+
+`tools/verify_v2_uploads.py` polls each item's IA catalog tasks until in-flight uploads commit, then downloads the file and asserts `schema_version == 2`. Run started 2026-05-21 12:47 PDT; results in `tmp/audit/v2_verify_results.jsonl`.
+
+(Verifier was still running when this section was first written. Update this paragraph with the final pass/fail count once it completes.)
+
+### Out of scope (deferred)
+
+- Other 125 heur_xref pilot items not in the buggy-24 set — still at v1. They have TOCs and can be rebuilt at v2 with `build_articles_companion` against `tmp/tocs_fixed/`-equivalent TOC files. Not blocking; tracked for a follow-up batch.
+- `_toc.json` schema bump — TOC files still at their existing schema; v2 only changes `_articles.json.gz`.
+
+### Related commits (this session)
+
+- `f64779f` — promote v2 schema to canonical `docs/articles_format.md`
+- `a954c41` — articles_pilot produces v2
+- `8674a8d` — v2 shared helpers + build_articles_companion + rerun_with_full_cache
+- `eb95ab5` — Pass A enrichments + strict error handling
+- `5db0634` — strict-mode year-cache fetch + prewarm driver
+- `6279e22` — `--force` flag + verify_v2_uploads
