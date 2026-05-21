@@ -1,13 +1,19 @@
-"""Build a v1 _articles.json.gz companion for an IA item.
+"""Build a v2 `_articles.json.gz` companion for an IA item, driven by a
+TOC file.
 
-Per articles_format.md: per-entry payload joins five bibliographic
-sources, each addressed by DOI:
+Per `docs/articles_format.md` (v2): per-entry payload joins five
+bibliographic sources, each addressed by DOI:
 
-  - crossref   — verbatim /works/{doi}, periodical fields stripped
-  - fatcat     — slim projection: idents + file linkage
-  - openalex   — slim: concepts, topics, citations, OA, authorships
-  - unpaywall  — slim: OA status
-  - pubmed     — slim: PMID, MeSH, pub types (biomedical only; via Europe PMC)
+  - crossref   — verbatim /works/{doi}, FULL fields (no strip, no projection)
+  - fatcat     — verbatim /release/lookup + /release/{id}/files
+  - openalex   — verbatim /works/doi:{doi}
+  - unpaywall  — verbatim /v2/{doi}
+  - pubmed     — verbatim Europe PMC core result (biomedical only)
+
+Plus top-level `issue_meta` / `volume_meta` populated from any Crossref
+`journal-issue` / `journal-volume` deposit that falls in the same
+(issn, vol, iss) bucket. Plus `has_retracted_entries` derived from
+entry-level `retracted` flags.
 
 Each source is file-cached by DOI (or by (issn, year) for the Crossref
 bulk fetch) so re-runs are free.
@@ -24,10 +30,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from segart_version import software_versions
+from articles_v2_common import (
+    SOURCE_VIA, SOURCE_LICENSE,
+    add_convenience_fields, route_by_type,
+)
 
 
 CACHE_ROOT = Path("/Users/brewster/tmp/segart/tmp")
-FULL_CACHE = CACHE_ROOT / "crossref_full_cache"
+# v2: separate cache dir (no type filter); v1's crossref_full_cache stays untouched.
+FULL_CACHE = CACHE_ROOT / "crossref_full_cache_v2"
 FATCAT_CACHE = CACHE_ROOT / "fatcat_doi_cache"
 FATCAT_FILES_CACHE = CACHE_ROOT / "fatcat_files_cache"
 OPENALEX_CACHE = CACHE_ROOT / "openalex_doi_cache"
@@ -35,24 +46,18 @@ UNPAYWALL_CACHE = CACHE_ROOT / "unpaywall_doi_cache"
 PUBMED_CACHE = CACHE_ROOT / "pubmed_doi_cache"
 
 EMAIL = "brewster@archive.org"
-HEADERS = {"User-Agent": f"segart-articles/1.0 (mailto:{EMAIL})"}
-
-# Periodical-level Crossref fields stripped before embedding per article.
-# Per articles_format.md: those belong in the pub_* collection, not on
-# every article record.
-PERIODICAL_FIELDS = {"container-title", "short-container-title", "ISSN",
-                     "issn-type", "publisher", "member", "prefix", "source"}
+HEADERS = {"User-Agent": f"segart-articles/1.1 (mailto:{EMAIL})"}
 
 
 def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None]:
-    """Fetch ALL fields for every article in (issn, year) from Crossref,
-    with cursor pagination so we never silently truncate. File-cached by
-    (issn, year) under tmp/crossref_full_cache/.
+    """v2: pull EVERY DOI Crossref has for (issn, year) — no type filter.
+    Cursor-paginated so prolific journal-years aren't truncated. File-cached
+    by (issn, year) under tmp/crossref_full_cache_v2/.
 
-    Distinct from the audit cache (tmp/crossref_journal_year_cache/) —
-    the audit used select=DOI,title,page,volume,issue,author to keep the
-    cache small for tier scoring. The articles file needs the rest of
-    each record (abstract, references, funder, license, dates, etc.).
+    Distinct from the audit cache (tmp/crossref_journal_year_cache/) — the
+    audit used select=DOI,title,page,volume,issue,author to keep its cache
+    small. The articles file needs the rest of each record (abstract,
+    references, funder, license, dates, ...).
     """
     safe = re.sub(r"[^A-Za-z0-9-]", "_", issn)
     p = FULL_CACHE / f"{safe}_{year}.json"
@@ -69,10 +74,11 @@ def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None
     while True:
         qs = urllib.parse.urlencode({
             "rows": 200,
-            "filter": (f"type:journal-article,from-pub-date:{year}-01,"
+            # v2: filter on date range only; no `type:` constraint.
+            "filter": (f"from-pub-date:{year}-01,"
                        f"until-pub-date:{year}-12"),
             "cursor": cursor,
-            "mailto": "brewster@archive.org",
+            "mailto": EMAIL,
             # NB: no `select=` — we want everything Crossref has
         })
         url = f"https://api.crossref.org/journals/{issn}/works?{qs}"
@@ -96,13 +102,10 @@ def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None
     FULL_CACHE.mkdir(parents=True, exist_ok=True)
     p_tmp = p.with_suffix(".json.tmp")
     p_tmp.write_text(json.dumps({"items": items, "error": error,
-                                  "paginated": True, "pages": pages_fetched}))
+                                  "paginated": True, "pages": pages_fetched,
+                                  "type_filter": None}))
     p_tmp.replace(p)
     return items, error
-
-
-def strip_periodical(rec: dict) -> dict:
-    return {k: v for k, v in rec.items() if k not in PERIODICAL_FIELDS}
 
 
 def _doi_cache_get(cache_dir: Path, doi: str, url: str,
@@ -181,103 +184,6 @@ def fetch_pubmed_by_doi(doi: str) -> dict | None:
     return results[0] if results else None
 
 
-def project_fatcat(rec: dict | None) -> dict | None:
-    """Slim projection per articles_format.md. Accepts the fatcat v2
-    release record with `_files` attached by fetch_fatcat_by_doi."""
-    if not rec or not rec.get("id"): return None
-    files_out = []
-    for f in rec.get("_files") or []:
-        urls = [{"url": u.get("url"), "rel": u.get("rel")}
-                for u in (f.get("urls") or [])]
-        files_out.append({
-            "ident":    f.get("id"),
-            "sha1":     f.get("sha1"),
-            "md5":      f.get("md5"),
-            "size":     f.get("size_bytes") or f.get("size"),
-            "mimetype": f.get("mimetype"),
-            "urls":     urls,
-        })
-    return {
-        "release_ident":   rec.get("id"),
-        "work_ident":      rec.get("work_id"),
-        "container_ident": rec.get("container_id"),
-        "release_stage":   rec.get("release_stage"),
-        "files":           files_out,
-    }
-
-
-def project_openalex(rec: dict | None) -> dict | None:
-    if not rec: return None
-    return {
-        "id":              rec.get("id"),
-        "concepts":        rec.get("concepts") or [],
-        "topics":          rec.get("topics") or [],
-        "cited_by_count":  rec.get("cited_by_count"),
-        "counts_by_year":  rec.get("counts_by_year") or [],
-        "open_access":     rec.get("open_access") or {},
-        "authorships":     rec.get("authorships") or [],
-    }
-
-
-def project_unpaywall(rec: dict | None) -> dict | None:
-    if not rec: return None
-    best = rec.get("best_oa_location") or {}
-    return {
-        "is_oa":           rec.get("is_oa"),
-        "oa_status":       rec.get("oa_status"),
-        "best_oa_url":     best.get("url"),
-        "best_oa_license": best.get("license"),
-        "best_oa_version": best.get("version"),
-        "has_repository_copy": any(
-            (loc.get("host_type") == "repository")
-            for loc in (rec.get("oa_locations") or [])
-        ),
-    }
-
-
-def project_pubmed(rec: dict | None) -> dict | None:
-    """Europe PMC `result` object → schema's pubmed slim form."""
-    if not rec: return None
-    if not rec.get("pmid"):
-        return None  # not in PubMed
-    # Europe PMC sometimes returns descriptorName/qualifierName as a plain
-    # string, sometimes as a dict {value, ui, majorTopic_YN}. Handle both.
-    def _v(x):
-        if isinstance(x, dict): return x.get("value")
-        return x
-    def _ui(x):
-        return x.get("ui") if isinstance(x, dict) else None
-    mesh = []
-    for h in (rec.get("meshHeadingList") or {}).get("meshHeading") or []:
-        d = h.get("descriptorName")
-        quals = [_v(q.get("qualifierName"))
-                 for q in (h.get("meshQualifierList") or {}).get("meshQualifier") or []]
-        mesh.append({
-            "id":    _ui(d) or h.get("descriptorName_UI"),
-            "term":  _v(d),
-            "major": h.get("majorTopic_YN") == "Y",
-            "qualifiers": [q for q in quals if q],
-        })
-    pub_types = []
-    for pt in (rec.get("pubTypeList") or {}).get("pubType") or []:
-        pub_types.append(pt if isinstance(pt, str) else pt.get("value"))
-    grants = []
-    for g in (rec.get("grantsList") or {}).get("grant") or []:
-        grants.append({
-            "agency":   g.get("agency"),
-            "grant_id": g.get("grantId"),
-            "country":  g.get("country"),
-        })
-    return {
-        "pmid":  rec.get("pmid"),
-        "pmcid": rec.get("pmcid"),
-        "mesh":  mesh,
-        "publication_types":  pub_types,
-        "structured_abstract": rec.get("abstractText"),
-        "grants": grants,
-    }
-
-
 def label_parts(s):
     s = str(s or "").strip()
     if not s: return {""}
@@ -308,10 +214,7 @@ toc = json.loads(toc_path.read_text())
 item = toc["item"]; issn = toc["issn"]
 year = toc["year"]; vol = toc["volume"]; iss = toc["issue"]
 
-# Fetch full Crossref records for (issn, year) — all fields, not the slim
-# audit-cache fields. articles_format.md requires the full /works/{doi}
-# payload (abstract, references, funder, license, dates, ...) minus
-# periodical-level fields.
+# Fetch full Crossref records for (issn, year) — every DOI, every field.
 crossref_records, fetch_error = fetch_crossref_full_for_year(issn, year)
 if fetch_error and not crossref_records:
     print(f"ERROR: Crossref fetch failed for ({issn}, {year}): {fetch_error}",
@@ -322,8 +225,12 @@ xref_issue = [r for r in crossref_records
               if label_matches(r.get("volume"), vol)
               and label_matches(r.get("issue"), iss)]
 
-# Index Crossref records by DOI (lowercase) for fast lookup
-by_doi = {(r.get("DOI") or "").lower(): r for r in xref_issue if r.get("DOI")}
+# v2: separate journal-issue / journal-volume deposits from articles.
+# They land at top-level issue_meta / volume_meta.
+issue_meta, volume_meta, article_works = route_by_type(xref_issue)
+
+# Index article-typed Crossref records by DOI (lowercase) for fast lookup
+by_doi = {(r.get("DOI") or "").lower(): r for r in article_works if r.get("DOI")}
 
 
 # Build the companion file. For every TOC entry with a DOI, hit all
@@ -331,6 +238,7 @@ by_doi = {(r.get("DOI") or "").lower(): r for r in xref_issue if r.get("DOI")}
 entries = {}
 src_hits = {"crossref": 0, "fatcat": 0, "openalex": 0,
             "unpaywall": 0, "pubmed": 0}
+n_retracted = 0
 for e in toc.get("entries") or []:
     doi = (e.get("ext_ids") or {}).get("doi", "") or ""
     doi_l = doi.lower()
@@ -356,27 +264,24 @@ for e in toc.get("entries") or []:
             print(f"  pubmed fetch failed for {doi}: {ex}", file=sys.stderr)
         time.sleep(0.1)  # be polite across providers
 
-    fatcat    = project_fatcat(fatcat_raw)
-    openalex  = project_openalex(openalex_raw)
-    unpaywall = project_unpaywall(unpaywall_raw)
-    pubmed    = project_pubmed(pubmed_raw)
-
     # Bubble up any new ext_ids we discovered
     ext_ids = dict(e.get("ext_ids") or {})
-    if pubmed and pubmed.get("pmid"):  ext_ids.setdefault("pmid",  pubmed["pmid"])
-    if pubmed and pubmed.get("pmcid"): ext_ids.setdefault("pmcid", pubmed["pmcid"])
-    if fatcat and fatcat.get("release_ident"):
-        ext_ids.setdefault("fatcat_release", fatcat["release_ident"])
-    if fatcat and fatcat.get("work_ident"):
-        ext_ids.setdefault("fatcat_work", fatcat["work_ident"])
-    if openalex and openalex.get("id"):
-        ext_ids.setdefault("openalex", openalex["id"].rsplit("/", 1)[-1])
+    if pubmed_raw and pubmed_raw.get("pmid"):
+        ext_ids.setdefault("pmid",  pubmed_raw["pmid"])
+    if pubmed_raw and pubmed_raw.get("pmcid"):
+        ext_ids.setdefault("pmcid", pubmed_raw["pmcid"])
+    if fatcat_raw and fatcat_raw.get("id"):
+        ext_ids.setdefault("fatcat_release", fatcat_raw["id"])
+    if fatcat_raw and fatcat_raw.get("work_id"):
+        ext_ids.setdefault("fatcat_work", fatcat_raw["work_id"])
+    if openalex_raw and openalex_raw.get("id"):
+        ext_ids.setdefault("openalex", openalex_raw["id"].rsplit("/", 1)[-1])
 
-    if xref:      src_hits["crossref"]  += 1
-    if fatcat:    src_hits["fatcat"]    += 1
-    if openalex:  src_hits["openalex"]  += 1
-    if unpaywall: src_hits["unpaywall"] += 1
-    if pubmed:    src_hits["pubmed"]    += 1
+    if xref:         src_hits["crossref"]  += 1
+    if fatcat_raw:   src_hits["fatcat"]    += 1
+    if openalex_raw: src_hits["openalex"]  += 1
+    if unpaywall_raw:src_hits["unpaywall"] += 1
+    if pubmed_raw:   src_hits["pubmed"]    += 1
 
     record = {
         "toc_entry_id": e["id"],
@@ -384,38 +289,36 @@ for e in toc.get("entries") or []:
         "match_method": "doi_lookup" if doi else "no_match",
         "match_confidence": 1.0 if doi else 0.0,
     }
+    # v2: keep FULL source blobs (no projection, no strip_periodical).
     # Per articles_format.md "absence vs null is not significant": omit
     # source keys for which we found nothing, rather than emit stubs.
-    if xref:      record["crossref"]  = strip_periodical(xref)
-    if fatcat:    record["fatcat"]    = fatcat
-    if openalex:  record["openalex"]  = openalex
-    if unpaywall: record["unpaywall"] = unpaywall
-    if pubmed:    record["pubmed"]    = pubmed
+    if xref:          record["crossref"]  = xref
+    if fatcat_raw:    record["fatcat"]    = fatcat_raw
+    if openalex_raw:  record["openalex"]  = openalex_raw
+    if unpaywall_raw: record["unpaywall"] = unpaywall_raw
+    if pubmed_raw:    record["pubmed"]    = pubmed_raw
+
+    # v2 convenience fields
+    add_convenience_fields(record)
+    if record.get("retracted"):
+        n_retracted += 1
     entries[e["id"]] = record
 
 today = time.strftime("%Y-%m-%d")
-SOURCE_VIA = {
-    "crossref":  "live_api_cached",
-    "fatcat":    "fatcat_release_lookup",
-    "openalex":  "openalex_works_doi_lookup",
-    "unpaywall": "unpaywall_v2_doi_lookup",
-    "pubmed":    "europe_pmc_search_by_doi",
-}
-SOURCE_LICENSE = {
-    "crossref":  "CC0 (bibliographic shell); abstracts retain publisher copyright",
-    "fatcat":    "CC0",
-    "openalex":  "CC0",
-    "unpaywall": "CC0",
-    "pubmed":    "US government work, public domain",
-}
 sources_used = {s: {"via": SOURCE_VIA[s], "fetched_at": today}
                 for s, n in src_hits.items() if n > 0}
+# Record the v2 broadened Crossref scope explicitly.
+if "crossref" in sources_used:
+    sources_used["crossref"]["type_filter"] = None
 licenses_used = {s: SOURCE_LICENSE[s] for s in sources_used}
 
 companion = {
-    "schema_version": 1,
+    "schema_version": 2,
     "ia_item": item,
     "toc_schema_version": toc.get("schema_version"),
+    "issue_meta": issue_meta,
+    "volume_meta": volume_meta,
+    "has_retracted_entries": n_retracted > 0,
     "provenance": {
         "software_versions": software_versions(),
         "sources": sources_used,
@@ -430,5 +333,8 @@ with gzip.open(out_path, "wt", encoding="utf-8") as fh:
 
 print(f"wrote {out_path} ({out_path.stat().st_size} bytes)")
 print(f"  {len(entries)} entries")
+print(f"  issue_meta:  {'yes' if issue_meta else 'no'}")
+print(f"  volume_meta: {'yes' if volume_meta else 'no'}")
+print(f"  retracted:   {n_retracted}")
 for k, v in src_hits.items():
     print(f"  matched_{k:9s} {v}/{len(entries)}")

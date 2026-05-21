@@ -17,7 +17,11 @@ from unittest.mock import patch
 SEGART = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SEGART))
 
-FULL_CACHE = SEGART / "tmp" / "crossref_full_cache"
+# Point at the v2 cache so a fresh re-fetch (now no-type-filter) feeds
+# both this script and articles_pilot from one source. The type-filter on
+# line ~49 below stays — the TOC pipeline only wants article DOIs, not
+# issue/volume deposits.
+FULL_CACHE = SEGART / "tmp" / "crossref_full_cache_v2"
 OUT_TOCS = SEGART / "tmp" / "tocs_fixed"
 OUT_AUDIT = SEGART / "tmp" / "audit"
 OUT_TOCS.mkdir(parents=True, exist_ok=True)

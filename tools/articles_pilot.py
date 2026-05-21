@@ -20,6 +20,10 @@ from pathlib import Path
 SEGART = Path("/Users/brewster/tmp/segart")
 sys.path.insert(0, str(SEGART / "tools"))
 from segart_version import software_versions  # noqa
+from articles_v2_common import (  # noqa
+    SOURCE_VIA, SOURCE_LICENSE,
+    add_convenience_fields, route_by_type,
+)
 
 # ---------------------------------------------------------------- caches/fetch
 CACHE_ROOT = SEGART / "tmp"
@@ -143,20 +147,7 @@ def fetch_pubmed_by_doi(doi):
 OUT_TMP = SEGART / "tmp" / "articles_pilot"
 OUT_TMP.mkdir(parents=True, exist_ok=True)
 
-SOURCE_VIA = {
-    "crossref":  "live_api_cached",
-    "fatcat":    "fatcat_release_lookup",
-    "openalex":  "openalex_works_doi_lookup",
-    "unpaywall": "unpaywall_v2_doi_lookup",
-    "pubmed":    "europe_pmc_search_by_doi",
-}
-SOURCE_LICENSE = {
-    "crossref":  "CC0 (bibliographic shell); abstracts retain publisher copyright",
-    "fatcat":    "CC0",
-    "openalex":  "CC0",
-    "unpaywall": "CC0",
-    "pubmed":    "US government work, public domain",
-}
+# SOURCE_VIA / SOURCE_LICENSE imported from articles_v2_common
 
 
 def fetch_with_retry(fn, *args, retries=6, base_delay=2.0):
@@ -199,68 +190,6 @@ def ia_metadata(item):
     if r.returncode != 0: return None
     try: return json.loads(r.stdout)
     except Exception: return None
-
-
-def _pick_title(rec):
-    """Multi-source title pick: prefer Crossref, fall back to OpenAlex, then
-    PubMed. Returns None if no source has a title."""
-    cr = rec.get("crossref") or {}
-    t = cr.get("title")
-    if isinstance(t, list) and t:
-        return t[0]
-    if isinstance(t, str) and t:
-        return t
-    oa = rec.get("openalex") or {}
-    t = oa.get("title") or oa.get("display_name")
-    if t: return t
-    pm = rec.get("pubmed") or {}
-    return pm.get("title")
-
-
-def _pick_abstract(rec):
-    """Multi-source abstract pick: prefer Crossref's raw JATS, fall back to
-    OpenAlex's inverted-index reconstruction, then PubMed's structured form.
-    Raw JATS preserved (no transform). Returns None if none available."""
-    cr = rec.get("crossref") or {}
-    a = cr.get("abstract")
-    if a: return a
-    oa = rec.get("openalex") or {}
-    inv = oa.get("abstract_inverted_index")
-    if inv:
-        # Reconstruct plain text from OpenAlex inverted index: {word: [positions]}.
-        pairs = [(pos, w) for w, ps in inv.items() for pos in (ps or [])]
-        pairs.sort()
-        return " ".join(w for _, w in pairs)
-    pm = rec.get("pubmed") or {}
-    return pm.get("abstract") or pm.get("structured_abstract")
-
-
-def _is_retracted(rec):
-    """Crossref's update-to[] non-empty OR update-policy set both signal
-    that the record has been revised/retracted/corrected. Only `update-to`
-    with type=='retraction' is a true retraction; we surface the broader
-    'has-been-updated' signal here and let consumers refine."""
-    cr = rec.get("crossref") or {}
-    updates = cr.get("update-to") or []
-    for u in updates:
-        if (u.get("type") or "").lower() == "retraction":
-            return True
-    return False
-
-
-def _add_convenience_fields(rec):
-    """v2: populate entry top-level convenience fields from source blobs.
-    Originals stay in their source blobs unchanged — these are copies/picks
-    surfaced for direct access. Mutates rec in place."""
-    cr = rec.get("crossref") or {}
-    oa = rec.get("openalex") or {}
-    rec["entry_type"] = cr.get("type")
-    rec["title"] = _pick_title(rec)
-    rec["abstract"] = _pick_abstract(rec)
-    rec["subjects"] = cr.get("subject") or []
-    rec["topics"] = oa.get("topics") or []
-    rec["concepts"] = oa.get("concepts") or []
-    rec["retracted"] = _is_retracted(rec)
 
 
 def derive_metadata(md):
@@ -309,17 +238,7 @@ def process_item(item):
     # records hold issue/volume-level metadata (special-issue title, editors,
     # subjects); they are NOT articles, so they go to top-level blocks rather
     # than `entries`.
-    issue_meta = None
-    volume_meta = None
-    article_works = []
-    for w in issue_works:
-        t = w.get("type")
-        if t == "journal-issue" and issue_meta is None:
-            issue_meta = w
-        elif t == "journal-volume" and volume_meta is None:
-            volume_meta = w
-        else:
-            article_works.append(w)
+    issue_meta, volume_meta, article_works = route_by_type(issue_works)
 
     if not article_works and issue_meta is None and volume_meta is None:
         out["status"] = "skip_no_crossref_articles"; return out
@@ -357,7 +276,7 @@ def process_item(item):
         # v2 convenience fields: derived/picked from the source blobs and
         # surfaced at entry top level for direct consumer access. Originals
         # remain in their source blobs unchanged.
-        _add_convenience_fields(rec)
+        add_convenience_fields(rec)
         if rec.get("retracted"):
             n_retracted += 1
         entries[eid] = rec
