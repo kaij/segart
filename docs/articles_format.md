@@ -180,12 +180,15 @@ Bundling them would couple two very different update cadences and force lightwei
     }
   ],
 
-  // ----- Event Data lookup -----
+  // ----- Event Data lookup (CURRENTLY DISABLED) -----
   // Citations / mentions in blog posts, Wikipedia, news, etc.
-  // Always inline — every event embedded in the articles file, no sidecars.
-  // Outlier entries (e.g. viral COVID papers with 10K+ events) inflate the
-  // file size; that's accepted. Counts + breakdown surfaced for fast access;
-  // raw events sit in `events[]` for full detail.
+  // Crossref Event Data was sunset on 2026-04-23. The API is gone; a
+  // one-time historical archive is request-only from Crossref support.
+  // Once we obtain and mirror that archive (see issue #8), this block
+  // will populate from the local mirror. Until then, this field is
+  // absent on all entries.
+  //
+  // Schema kept as documentation for the post-mirror state:
   "event_data": {
     "total_events": 47,
     "sources": { "wikipedia": 3, "news": 12, "blog": 8, "twitter": 24 },

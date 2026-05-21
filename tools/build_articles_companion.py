@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from segart_version import software_versions
 from articles_v2_common import (
     SOURCE_VIA, SOURCE_LICENSE,
-    add_convenience_fields, route_by_type,
+    add_convenience_fields, route_by_type, derive_crossmark,
+    expand_funders, expand_relations, expand_event_data,
 )
 
 
@@ -44,6 +45,9 @@ FATCAT_FILES_CACHE = CACHE_ROOT / "fatcat_files_cache"
 OPENALEX_CACHE = CACHE_ROOT / "openalex_doi_cache"
 UNPAYWALL_CACHE = CACHE_ROOT / "unpaywall_doi_cache"
 PUBMED_CACHE = CACHE_ROOT / "pubmed_doi_cache"
+CROSSREF_FUNDER_CACHE = CACHE_ROOT / "crossref_funder_cache"  # v2 Pass A
+CROSSREF_WORK_CACHE   = CACHE_ROOT / "crossref_work_cache"    # v2 Pass A (relation traversal)
+EVENT_DATA_CACHE      = CACHE_ROOT / "event_data_cache"       # v2 Pass A (Event Data)
 
 EMAIL = "brewster@archive.org"
 HEADERS = {"User-Agent": f"segart-articles/1.1 (mailto:{EMAIL})"}
@@ -108,40 +112,89 @@ def fetch_crossref_full_for_year(issn: str, year: str) -> tuple[list, str | None
     return items, error
 
 
+def _parse_retry_after(value):
+    """Retry-After header → seconds, clamped to [1, 300]. Supports both
+    integer-seconds and HTTP-date forms."""
+    value = (value or "").strip()
+    if not value:
+        return 5
+    try:
+        return max(1, min(int(value), 300))
+    except ValueError:
+        pass
+    try:
+        import email.utils
+        from datetime import datetime, timezone
+        ts = email.utils.parsedate_to_datetime(value)
+        delta = (ts - datetime.now(timezone.utc)).total_seconds()
+        return max(1, min(int(delta), 300))
+    except Exception:
+        return 5
+
+
 def _doi_cache_get(cache_dir: Path, doi: str, url: str,
-                   extra_headers: dict | None = None) -> dict | None:
-    """File-cached single GET by DOI. Returns parsed JSON, None for a
-    cached 404 (no record exists). Transient errors are NOT cached —
-    re-runs will retry."""
+                   extra_headers: dict | None = None,
+                   max_retries: int = 6) -> dict | None:
+    """Cached single GET by DOI. Returns parsed JSON or None for legitimate
+    404. Strict-mode behavior (archival, not best-effort):
+
+      - 200: cache + return payload
+      - 404: cache as definitive null, return None
+      - 429 / 503: retry with backoff honoring Retry-After
+      - network / SSL / timeout: retry with exponential backoff
+      - other 4xx / 5xx: raise immediately
+      - retries exhausted on transient: raise
+
+    Never caches a transient error — a future re-run does a clean fetch.
+    """
+    import random as _r
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", doi)
     p = cache_dir / f"{safe}.json"
     if p.exists():
         try:
             d = json.loads(p.read_text())
-            # Only trust the cache when the previous fetch reached the
-            # server (status 200 or 404). Transient errors get a retry.
-            if not d.get("error"):
-                return d.get("data")
+            return d.get("data")
         except Exception:
-            pass
-    req = urllib.request.Request(url, headers={**HEADERS, **(extra_headers or {})})
-    data = None
-    error = None
-    try:
-        with urllib.request.urlopen(req, timeout=30) as fh:
-            data = json.load(fh)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            data = None  # legitimately no record — cache this
-        else:
-            error = f"HTTP {e.code}"
-    except Exception as e:
-        error = str(e)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    p_tmp = p.with_suffix(".json.tmp")
-    p_tmp.write_text(json.dumps({"data": data, "error": error, "url": url}))
-    p_tmp.replace(p)
-    return data
+            pass  # corrupted; refetch
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers={**HEADERS, **(extra_headers or {})})
+            with urllib.request.urlopen(req, timeout=30) as fh:
+                data = json.load(fh)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            p_tmp = p.with_suffix(".json.tmp")
+            p_tmp.write_text(json.dumps({"data": data, "url": url}))
+            p_tmp.replace(p)
+            return data
+
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                p_tmp = p.with_suffix(".json.tmp")
+                p_tmp.write_text(json.dumps({"data": None, "url": url, "status": 404}))
+                p_tmp.replace(p)
+                return None
+            if e.code in (429, 503):
+                ra = e.headers.get("Retry-After")
+                delay = _parse_retry_after(ra) if ra else min(5 * (2 ** attempt), 120)
+                last_err = f"HTTP {e.code} (attempt {attempt+1}/{max_retries}, Retry-After={ra!r})"
+                print(f"  backoff {delay}s: {last_err}  {url[:100]}", file=sys.stderr)
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"{last_err} — gave up on {url}")
+            raise RuntimeError(f"HTTP {e.code} (permanent) on {url}")
+
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            last_err = f"{type(e).__name__}: {e} (attempt {attempt+1}/{max_retries})"
+            delay = min(5 * (2 ** attempt), 120) * (0.5 + _r.random())
+            print(f"  backoff {delay:.1f}s: {last_err}  {url[:100]}", file=sys.stderr)
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"{last_err} — gave up on {url}")
 
 
 def fetch_fatcat_by_doi(doi: str) -> dict | None:
@@ -170,6 +223,97 @@ def fetch_unpaywall_by_doi(doi: str) -> dict | None:
     url = (f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi, safe='')}"
            f"?email={EMAIL}")
     return _doi_cache_get(UNPAYWALL_CACHE, doi, url)
+
+
+def fetch_crossref_funder(funder_doi: str) -> dict | None:
+    """v2 Pass A: fetch full /funders/{funder-doi} record. Returns the
+    `message` payload (the funder's own metadata: name, alt-names, location,
+    hierarchy, descendants, work counts)."""
+    quoted = urllib.parse.quote(funder_doi)
+    url = f"https://api.crossref.org/funders/{quoted}?mailto={EMAIL}"
+    data = _doi_cache_get(CROSSREF_FUNDER_CACHE, funder_doi, url)
+    if not data:
+        return None
+    return data.get("message")
+
+
+def fetch_crossref_work(doi: str) -> dict | None:
+    """v2 Pass A: fetch full /works/{doi} record for relation traversal.
+    Distinct from the year-level cache because related DOIs commonly point
+    at preprints / translations / versions in OTHER journals (or in
+    repositories like bioRxiv) that the year-level fetch wouldn't have."""
+    quoted = urllib.parse.quote(doi)
+    url = f"https://api.crossref.org/works/{quoted}?mailto={EMAIL}"
+    data = _doi_cache_get(CROSSREF_WORK_CACHE, doi, url)
+    if not data:
+        return None
+    return data.get("message")
+
+
+def fetch_event_data(doi: str) -> dict | None:
+    """v2 Pass A: fetch ALL Crossref Event Data events for a DOI, paginated.
+    Returns {total_events, sources, events[]} or None.
+
+    SSL note: api.eventdata.crossref.org has had an expired cert (2026-05).
+    We pass an unverified SSL context for this endpoint specifically — it's
+    a public open-data API with no auth secrets. Worst case from a MITM:
+    fake events injected, acceptable for archival enrichment."""
+    import ssl
+    from collections import Counter
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", doi)
+    p = EVENT_DATA_CACHE / f"{safe}.json"
+    if p.exists():
+        try:
+            d = json.loads(p.read_text())
+            if not d.get("error"):
+                return d.get("data")
+        except Exception:
+            pass
+
+    insecure_ctx = ssl.create_default_context()
+    insecure_ctx.check_hostname = False
+    insecure_ctx.verify_mode = ssl.CERT_NONE
+
+    all_events = []
+    cursor = None
+    error = None
+    pages = 0
+    while True:
+        params = {"obj-id": f"https://doi.org/{doi}",
+                  "rows": 1000, "mailto": EMAIL}
+        if cursor:
+            params["cursor"] = cursor
+        url = ("https://api.eventdata.crossref.org/v1/events?"
+               + urllib.parse.urlencode(params))
+        req = urllib.request.Request(url, headers=HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=30, context=insecure_ctx) as fh:
+                d = json.load(fh)
+        except Exception as e:
+            error = str(e); break
+        msg = d.get("message", {})
+        events = msg.get("events") or []
+        all_events.extend(events)
+        nc = msg.get("next-cursor")
+        pages += 1
+        if not events or not nc or nc == cursor or pages >= 50:
+            break
+        cursor = nc
+
+    if error:
+        return None
+
+    sources = Counter(e.get("source-id") or e.get("source") or "unknown"
+                      for e in all_events)
+    data = {"total_events": len(all_events),
+            "sources":      dict(sources),
+            "events":       all_events}
+
+    EVENT_DATA_CACHE.mkdir(parents=True, exist_ok=True)
+    p_tmp = p.with_suffix(".json.tmp")
+    p_tmp.write_text(json.dumps({"data": data, "error": None, "doi": doi}))
+    p_tmp.replace(p)
+    return data
 
 
 def fetch_pubmed_by_doi(doi: str) -> dict | None:
@@ -246,22 +390,13 @@ for e in toc.get("entries") or []:
 
     fatcat_raw = openalex_raw = unpaywall_raw = pubmed_raw = None
     if doi:
-        try:
-            fatcat_raw   = fetch_fatcat_by_doi(doi)
-        except Exception as ex:
-            print(f"  fatcat fetch failed for {doi}: {ex}", file=sys.stderr)
-        try:
-            openalex_raw = fetch_openalex_by_doi(doi)
-        except Exception as ex:
-            print(f"  openalex fetch failed for {doi}: {ex}", file=sys.stderr)
-        try:
-            unpaywall_raw = fetch_unpaywall_by_doi(doi)
-        except Exception as ex:
-            print(f"  unpaywall fetch failed for {doi}: {ex}", file=sys.stderr)
-        try:
-            pubmed_raw   = fetch_pubmed_by_doi(doi)
-        except Exception as ex:
-            print(f"  pubmed fetch failed for {doi}: {ex}", file=sys.stderr)
+        # Strict-mode fetches: _doi_cache_get retries 429/503/network with
+        # Retry-After backoff; raises on permanent error. Any RuntimeError
+        # here aborts the whole build — archival ETL, no partial files.
+        fatcat_raw    = fetch_fatcat_by_doi(doi)
+        openalex_raw  = fetch_openalex_by_doi(doi)
+        unpaywall_raw = fetch_unpaywall_by_doi(doi)
+        pubmed_raw    = fetch_pubmed_by_doi(doi)
         time.sleep(0.1)  # be polite across providers
 
     # Bubble up any new ext_ids we discovered
@@ -300,6 +435,19 @@ for e in toc.get("entries") or []:
 
     # v2 convenience fields
     add_convenience_fields(record)
+    # Pass A enrichment: Crossmark (derivation, no extra fetch)
+    cm = derive_crossmark(record)
+    if cm is not None:
+        record["crossmark"] = cm
+    # Pass A enrichment: Funder Registry expansion (per funder DOI).
+    # Strict: a permanent fetch failure aborts the build (archival ETL).
+    expand_funders(record, fetch_crossref_funder)
+    # Pass A enrichment: relation[] one-hop traversal (per related DOI)
+    expand_relations(record, fetch_crossref_work)
+    # Pass A enrichment: Event Data — DISABLED.
+    # api.eventdata.crossref.org was sunset on 2026-04-23. See issue #8 for
+    # the plan to mirror the historical archive on IA.
+    # expand_event_data(record, fetch_event_data)
     if record.get("retracted"):
         n_retracted += 1
     entries[e["id"]] = record
