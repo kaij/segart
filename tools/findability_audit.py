@@ -115,42 +115,123 @@ def is_skippable_item(item: str, md: dict) -> str | None:
     return None
 
 
+def _cr_title(r):
+    t = r.get("title")
+    return (t or [""])[0] if isinstance(t, list) else (t or "")
+
+
+_PAGE_NUM_RE = re.compile(r"\d+")
+
+
+def _page_endpoints(page_str: str | None):
+    """Extract first and last integer from a page-range string. Returns
+    (start, end) tuple, or (None, None) if no digits."""
+    if not page_str:
+        return (None, None)
+    nums = _PAGE_NUM_RE.findall(str(page_str))
+    if not nums:
+        return (None, None)
+    start = int(nums[0])
+    end = int(nums[-1]) if len(nums) > 1 else start
+    return (start, end)
+
+
+def _pages_overlap(anchor_pages: str, crossref_page: str, tol: int = 1) -> bool:
+    """Check if anchor's printed_pages overlap with crossref's page field
+    within `tol` pages (default ±1, per [ill_data_semantics] — ILL endpoints
+    are unreliable by ±1)."""
+    a_s, a_e = _page_endpoints(anchor_pages)
+    c_s, c_e = _page_endpoints(crossref_page)
+    if a_s is None or c_s is None:
+        return False
+    # Intervals overlap if max(starts) ≤ min(ends), with tolerance applied
+    # to the gap.
+    return max(a_s, c_s) - min(a_e, c_e) <= tol
+
+
+def _title_score(a_title: str, r) -> float:
+    """SequenceMatcher ratio on lowercased titles."""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a_title.lower(), _cr_title(r).lower()).ratio()
+
+
+def _best_title_match(a_title: str, records: list):
+    """Return (best_record, score) — best title-similarity match across the
+    given candidate set, or (None, 0.0) if records is empty."""
+    if not records:
+        return None, 0.0
+    best = None; best_score = 0.0
+    for r in records:
+        s = _title_score(a_title, r)
+        if s > best_score:
+            best_score = s; best = r
+    return best, best_score
+
+
 def evaluate_anchor(anchor: dict, crossref_records: list, ia_md_metadata: dict) -> str:
-    """The pipeline-equivalence test. Returns 'success' / 'wrong_voliss' /
-    'not_in_crossref'."""
+    """The pipeline-equivalence test, "would a person scanning this issue's
+    TOC see the article?" Returns 'success' / 'wrong_voliss' /
+    'not_in_crossref'.
+
+    Logic:
+      1. Filter Crossref records to the IA item's (vol, iss) — the issue's
+         actual TOC, typically 5-50 articles.
+      2. Within that issue, find the BEST-title match for the anchor.
+         If the best is plausibly the right one (score ≥ within-issue floor,
+         OR author surname agrees), it's a success — same as a person seeing
+         the closest match in a printed TOC.
+      3. If no plausible match in-issue, scan the rest of the journal-year
+         for a likely match (stricter threshold since the candidate pool is
+         100× bigger). If found, that's a wrong_voliss case.
+      4. Otherwise, not_in_crossref.
+
+    Author surname is a tiebreaker / corroborator, not a primary filter."""
     issn, vol_ia, iss_ia, year_ia = derive_metadata({"metadata": ia_md_metadata})
 
     a_title = anchor.get("article_title") or ""
     a_author = anchor.get("article_author") or ""
+    a_pages = anchor.get("printed_pages") or ""
 
-    # Title + author within the journal-year scope (no vol/iss prefilter).
-    candidates = []
+    # Step 1: split Crossref records into the issue and the rest of the year.
+    in_issue, rest = [], []
     for r in crossref_records:
-        t = r.get("title")
-        cr_title = (t or [""])[0] if isinstance(t, list) else (t or "")
-        if fuzzy_first_n_match(a_title, cr_title):
-            candidates.append(r)
-            continue
-        # Author surname fallback if title-fuzzy didn't hit — but constrain
-        # to records sharing journal-year (already guaranteed by scope).
-        # Use the pre-built author_surname_match against a single-record list.
-        if author_surname_match(a_author, [r]):
-            # Title cross-check to avoid spurious surname collisions in
-            # high-anchor-journal years: require some title overlap.
-            from difflib import SequenceMatcher
-            ratio = SequenceMatcher(None, a_title.lower(),
-                                    str(cr_title).lower()).ratio()
-            if ratio >= 0.55:
-                candidates.append(r)
+        if (label_matches(r.get("volume"), vol_ia)
+                and label_matches(r.get("issue"), iss_ia)):
+            in_issue.append(r)
+        else:
+            rest.append(r)
 
-    if not candidates:
-        return "not_in_crossref"
-
-    for c in candidates:
-        if (label_matches(c.get("volume"), vol_ia)
-                and label_matches(c.get("issue"), iss_ia)):
+    # Step 2: best-within-issue match. Person-scanning-the-TOC model.
+    best, score = _best_title_match(a_title, in_issue)
+    if best is not None:
+        author_ok = author_surname_match(a_author, [best])
+        pages_ok = _pages_overlap(a_pages, best.get("page"))
+        # Success criteria, any of:
+        #   - clear title match on its own (≥ 0.5)
+        #   - moderate title (≥ 0.3) + author surname agrees
+        #   - moderate title (≥ 0.3) + page-range overlap (±1)
+        #   - any title overlap (≥ 0.2) + author surname + small issue
+        #     (catches paraphrased / abbreviated ILL-form titles)
+        if score >= 0.5:
             return "success"
-    return "wrong_voliss"
+        if score >= 0.3 and (author_ok or pages_ok):
+            return "success"
+        if author_ok and score >= 0.2 and len(in_issue) <= 50:
+            return "success"
+
+    # Step 3: no plausible in-issue match. Scan the rest of the journal-year.
+    best_out, score_out = _best_title_match(a_title, rest)
+    if best_out is not None and score_out >= 0.75:
+        # Article is in Crossref but registered under a different vol/iss
+        # than the IA item carries — pipeline-tunable (combined-issue,
+        # supplement, etc.).
+        return "wrong_voliss"
+    # Lower confidence wrong_voliss when author surname agrees and title
+    # has at least token overlap.
+    if best_out is not None and score_out >= 0.5 and author_surname_match(a_author, [best_out]):
+        return "wrong_voliss"
+
+    return "not_in_crossref"
 
 
 def process_item(item_id: str, anchors_for_item: list) -> list[dict]:
