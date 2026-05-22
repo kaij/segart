@@ -5,7 +5,7 @@ Reads JSONL records from parse_ill_logs.py on stdin (or a path) and, for each
 unique ISSN, calls the fatcat lookup_container endpoint at scholar.archive.org.
 Adds these fields to each record:
 
-  fatcat_container_id        — fatcat container ident (e.g. td5cjnem25b35nugn4qftmwcna)
+  fatcat_container_id        — fatcat container id (v2 UUID, e.g. 98fa24b4-8cd7-43be-b686-6f2059b2c268)
   fatcat_container_name      — canonical journal name
   fatcat_sim_pubid           — IA SIM publication ID (extra.ia.sim.sim_pubid)
   fatcat_sim_year_spans      — year ranges IA holds SIM scans for
@@ -26,7 +26,7 @@ import time
 import urllib.parse
 import urllib.request
 
-FATCAT = "https://scholar.archive.org/api/fatcat/v1"
+FATCAT = "https://scholar.archive.org/api/fatcat/v2"
 USER_AGENT = "segart-fatcat-lookup/0.1 (+https://github.com/brewsterkahle/segart)"
 
 
@@ -41,15 +41,15 @@ def fatcat_get(path, params=None, timeout=15):
 
 def lookup_container_by_issn(issn):
     return fatcat_get(
-        "/lookup_container",
-        {"extid_type": "issnl", "extid_value": issn},
+        "/container/lookup",
+        {"id_type": "issnl", "id_value": issn},
     )
 
 
 def container_summary(container):
     sim = (container.get("extra") or {}).get("ia", {}).get("sim", {}) or {}
     return {
-        "fatcat_container_id": container.get("ident"),
+        "fatcat_container_id": container.get("id"),
         "fatcat_container_name": container.get("name"),
         "fatcat_sim_pubid": sim.get("sim_pubid"),
         "fatcat_sim_year_spans": sim.get("year_spans"),
