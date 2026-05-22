@@ -2,12 +2,13 @@
 
 Generated 2026-05-14 08:53 — **149** items published, **77** entries flagged across **58** items.
 
-## Status as of 2026-05-21
+## Status as of 2026-05-22
 
-The flagged-entries content below is from the 2026-05-14 heurxref-pilot QA run. Two later sections document subsequent work:
+The flagged-entries content below is from the 2026-05-14 heurxref-pilot QA run. Three later sections document subsequent work:
 
 - **Buggy-cache fix — 2026-05-20/21** ([jump](#buggy-cache-fix--2026-05-20--21)): 24 pilot items re-published from the full year-level Crossref cache.
 - **v2 cutover — 2026-05-21** ([jump](#v2-cutover--2026-05-21)): hard v1→v2 schema cutover for every published `_articles.json.gz` on IA (935 items = 911 articles_pilot + 24 heur_xref-fix). 935/935 ok.
+- **Findability audit — 2026-05-22** ([jump](#findability-audit--2026-05-22)): production-aware ILL-anchored audit across top-50 ISSNs (16,225 items, 23,659 anchors). 62.5% findable via current Crossref pipeline; 68 publisher-year cells classified clean tier.
 
 Total IA periodical items with segart `_articles.json.gz` as of this write: **1,060** (149 heurxref pilot + 911 articles_pilot, all overlapping with the v2 rebuild). 125 heurxref pilot items not in the buggy-24 set are still at v1; queued for a follow-up batch.
 
@@ -872,3 +873,102 @@ Per-item checkpoints: `tmp/audit/v2_rebuild_911_checkpoint.jsonl` and `tmp/audit
 - `eb95ab5` — Pass A enrichments + strict error handling
 - `5db0634` — strict-mode year-cache fetch + prewarm driver
 - `6279e22` — `--force` flag + verify_v2_uploads
+
+## Findability audit — 2026-05-22
+
+Production-aware audit answering issue #11: *which (publisher × year-bucket) and (journal × year-bucket) sets of our scanned periodicals have high % of ILL requests findable via the current Crossref-based TOC pipeline?*
+
+### Method
+
+`tools/findability_audit.py` evaluates each ILL anchor against the heur_xref pipeline's exact behavior:
+
+1. Use `anchor.identifier` to grab the IA item (the librarian's actual fulfillment target).
+2. Pull IA metadata for the item — authoritative `(issn, vol, iss, year)`.
+3. Fetch Crossref's full year-level record set for `(issn, year)` (v2 cache, no type filter).
+4. Score the anchor against records in scope:
+   - In-issue best-title match (≥ 0.5 alone, or ≥ 0.3 with author surname OR page-range overlap ±1, or ≥ 0.2 with author + small issue) → **success** (the pipeline would include the article).
+   - In-journal-year but different vol/iss with strong title match → **wrong_voliss** (article in Crossref but pipeline routes it elsewhere; tunable: combined-issue, supplement, season labels).
+   - No plausible match → **not_in_crossref** (true Crossref coverage gap).
+
+### Scope
+
+Top-50 ISSNs by ILL anchor count → 16,225 unique IA items → 23,659 anchors scored. Wall time 2h 11m.
+
+### Per-anchor verdicts
+
+| Verdict | Count | % |
+|---|---|---|
+| `success` (pipeline would include) | **14,782** | **62.5%** |
+| `not_in_crossref` (Crossref gap) | 7,755 | 32.8% |
+| `wrong_voliss` (pipeline-tunable) | 1,122 | 4.7% |
+
+Plus 4,178 items skipped (1,867 with no Crossref records, 1,503 with no vol/iss in IA metadata, 766 Crossref fetch failures after retries, 42 other).
+
+### Tier counts (min 10 anchors per cell)
+
+| Tier | Journal-year cells | Publisher-year cells |
+|---|---|---|
+| **clean (≥95%)** | 105 | **68** |
+| **near (80–94%)** | 53 | 50 |
+| mid (50–79%) | 100 | 91 |
+| bad (<50%) | 140 | 108 |
+| low_anchor (<10 anchors) | 128 | 100 |
+
+### Top-15 clean publisher × year-bucket cells
+
+All at 100% findable (every ILL anchor in cell is captured by the current pipeline):
+
+| Publisher | Year-bucket | Anchors |
+|---|---|---|
+| Taylor & Francis Ltd | 2005–2009 | 202 |
+| Taylor & Francis Ltd | 2000–2004 | 119 |
+| Pergamon Press Inc. | 1985–1989 | 85 |
+| Wiley Subscription Services, Inc. | 1985–1989 | 84 |
+| Blackwell Publishing Ltd. | 2005–2009 | 82 |
+| Journal of Bone and Joint Surgery, Inc. | 1980–1984 | 77 |
+| Taylor & Francis Group | 2005–2009 | 76 |
+| Cambridge University Press | 1995–1999 | 75 |
+| Cambridge University Press | 1990–1994 | 74 |
+| American Occupational Therapy Association, Inc. | 1995–1999 | 67 |
+| Taylor & Francis Group | 1995–1999 | 64 |
+| Cambridge University Press | 1980–1984 | 61 |
+| Taylor & Francis Group | 1990–1994 | 58 |
+| American Occupational Therapy Association, Inc. | 2000–2004 | 57 |
+| Taylor & Francis Ltd | 1995–1999 | 57 |
+
+### Top-10 near-clean publisher × year-bucket cells
+
+| Publisher | Year-bucket | Anchors | Findable |
+|---|---|---|---|
+| Pergamon Press Inc. | 1990–1994 | 177 | 94.92% |
+| Taylor & Francis Group | 2010–2014 | 96 | 93.75% |
+| Journal of Bone and Joint Surgery, Inc. | 1975–1979 | 80 | 93.75% |
+| American Veterinary Medical Association | 1995–1999 | 267 | 93.63% |
+| American Psychiatric Publishing, Inc. | 2010–2014 | 77 | 93.51% |
+| Taylor & Francis Ltd. | 2005–2009 | 101 | 93.07% |
+| American Psychiatric Publishing, Inc. | 1995–1999 | 71 | 92.96% |
+| Blackwell Publishing Ltd. | 1975–1979 | 14 | 92.86% |
+| Pergamon Press Inc. | 2000–2004 | 78 | 92.31% |
+| American Society for Clinical Nutrition, Inc. | 1975–1979 | 63 | 92.06% |
+
+### Observations
+
+- **Publisher-name normalization needed.** Taylor & Francis appears as `Taylor & Francis Ltd`, `Taylor & Francis Group`, and `Taylor & Francis Ltd.` — same publisher, three rows. Same for several others. A canonical-name pass would consolidate cells and likely promote more to clean tier.
+- **32.8% `not_in_crossref` is the Crossref-only ceiling**, not the true ceiling. Per a sampled probe of 8 `not_in_crossref` anchors (issue #12 comment), PubMed and OpenAlex by (issn, vol, iss) recover 7/8 — most of the gap is older content with no Crossref DOI but with PMID / OpenAlex entries. The multi-source workflow in issue #12 (Phase 2 = PubMed, Phase 3 = OpenAlex) is expected to lift overall findability from ~63% toward ~90%+.
+- **`wrong_voliss` (4.7%) is small and pipeline-tunable.** Combined-issue handling (`5/6`), supplement labels (`Suppl 1`, `S1`), and season-name normalization in `label_matches` would capture most.
+
+### Output artifacts
+
+All in `tmp/audit/` (gitignored — JSONL is not in repo, summary lives here):
+
+- `findability_per_anchor.jsonl` — 23,659 anchor verdicts, one per line
+- `findability_by_journal_year.jsonl` — 526 (issn, year-bucket) cells, ranked by findable_rate
+- `findability_by_publisher_year.jsonl` — 417 (publisher, year-bucket) cells, ranked
+- `findability_top50_issns_scope.txt` — the input scope (16,280 IA items)
+
+### Next steps
+
+1. **Publisher-name normalization** before downstream consumers read the publisher table.
+2. **Multi-source discovery rollout** (issue #12) — expected to lift findable rate substantially for the `not_in_crossref` 32.8%.
+3. **Expand scope beyond top-50 ISSNs** — full corpus is ~204K IA items vs the 16K sampled here. Cache infrastructure built today (`tmp/ia_metadata_cache/`, `crossref_full_cache_v2/`) makes this incremental.
+4. **`wrong_voliss` matcher tweaks** in `label_matches` — combined-issue + supplement + season normalization.
