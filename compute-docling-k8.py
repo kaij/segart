@@ -11,9 +11,14 @@ Usage:
   ./compute-docling-k8.py <item>
   ./compute-docling-k8.py --help
 
+The API is always told filename=<item>.pdf so it processes exactly the
+canonical Text PDF and skips any encrypted siblings (*.lcpdf,
+*_encrypted.pdf, *.acspdf). This matches the IA convention for ~99.83%
+of items in scope; the rare multi-PDF case is intentionally not handled
+here — use a different tool if you need fanout.
+
 Defaults (each overridable via flag or env var):
   - output:       tmp/items/<item>/  (SEGART_CACHE)
-  - filename:     <item>.pdf  (so encrypted siblings are skipped — DOCLING_FILENAME)
   - timeout:      1800s  (DOCLING_API_TIMEOUT_SEC)
   - poll cadence: 5s  (POLL_INTERVAL_SEC)
   - credentials:  ~/.config/internetarchive/ia.ini [s3] access/secret,
@@ -101,12 +106,6 @@ def main():
     )
     ap.add_argument("item", help="IA item identifier (slug from archive.org/details/<item>)")
     ap.add_argument(
-        "--filename", "-f",
-        default=os.environ.get("DOCLING_FILENAME", None),
-        help="Restrict to a single file within the item. Default: <item>.pdf. "
-             "Pass an empty string ('') to let the API process every PDF in the item.",
-    )
-    ap.add_argument(
         "--cache-dir",
         default=os.environ.get("SEGART_CACHE") or str(DEFAULT_TMP / "items"),
         help="Output items root (default: %(default)s)",
@@ -145,9 +144,8 @@ def main():
                     help="Suppress per-poll status pretty-print.")
     args = ap.parse_args()
 
-    # Default filename if not provided at all (None) — use <item>.pdf.
-    # An explicit empty string opts back into every-PDF fanout.
-    filename = args.filename if args.filename is not None else f"{args.item}.pdf"
+    # Pegged: always tell the API to process exactly <item>.pdf.
+    filename = f"{args.item}.pdf"
 
     # Resolve creds
     if args.no_creds:
@@ -164,9 +162,7 @@ def main():
     job_outfile = item_dir / f"{args.item}_docling_job.json"
 
     # Build POST body
-    body: dict = {"item": args.item}
-    if filename:
-        body["filename"] = filename
+    body: dict = {"item": args.item, "filename": filename}
     if access_key and secret_key:
         body["access_key"] = access_key
         body["secret_key"] = secret_key
