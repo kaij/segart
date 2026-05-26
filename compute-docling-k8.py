@@ -135,11 +135,6 @@ def main():
         default=os.environ.get("IA_S3_SECRET_KEY"),
         help="IA S3 secret key (default: from ~/.config/internetarchive/ia.ini)",
     )
-    ap.add_argument(
-        "--no-creds", action="store_true",
-        default=bool(os.environ.get("IA_S3_NO_CREDS")),
-        help="Don't send credentials; rely on the API's server-configured default.",
-    )
     ap.add_argument("--quiet", "-q", action="store_true",
                     help="Suppress per-poll status pretty-print.")
     args = ap.parse_args()
@@ -147,15 +142,14 @@ def main():
     # Pegged: always tell the API to process exactly <item>.pdf.
     filename = f"{args.item}.pdf"
 
-    # Resolve creds
-    if args.no_creds:
-        access_key = secret_key = None
-    else:
-        access_key, secret_key = args.access_key, args.secret_key
-        if not (access_key and secret_key):
-            ini_a, ini_s = load_ia_credentials(DEFAULT_IA_INI)
-            access_key = access_key or ini_a
-            secret_key = secret_key or ini_s
+    # Resolve creds: --flag > env > ia.ini. Always send whatever we find;
+    # if the API doesn't accept them for this item, it'll say so in the
+    # job response and we'll surface that as a non-zero exit.
+    access_key, secret_key = args.access_key, args.secret_key
+    if not (access_key and secret_key):
+        ini_a, ini_s = load_ia_credentials(DEFAULT_IA_INI)
+        access_key = access_key or ini_a
+        secret_key = secret_key or ini_s
 
     item_dir = Path(args.cache_dir) / args.item
     item_dir.mkdir(parents=True, exist_ok=True)
