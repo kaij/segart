@@ -27,6 +27,19 @@
 # via DOCLING_FILENAME=<name> (or DOCLING_FILENAME="" to opt back in to
 # the every-PDF fanout, e.g. if you want to process all files in a
 # multi-PDF item).
+#
+# Credentials: for items the API's default service credential can't read
+# (private/dark items), we forward IA S3 credentials in the POST body.
+# Source (highest precedence first):
+#   1. IA_S3_ACCESS_KEY + IA_S3_SECRET_KEY env vars
+#   2. ~/.config/internetarchive/ia.ini  ([s3] access=... secret=...)
+# Set IA_S3_NO_CREDS=1 to suppress sending creds even if they're
+# available (relies on server default). Credentials are passed to curl
+# via stdin (--data @-) so they don't appear in `ps` listings.
+#
+# Saturation metric: prints "submit→running: <s>" the first time status
+# transitions out of "pending". Long values indicate the API's worker
+# pool is saturated and your job sat in queue.
 
 set -eo pipefail
 
@@ -47,24 +60,53 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 # Empty string = let the API process every PDF in the item (fanout).
 # Default = restrict to the canonical Text PDF only.
 FILENAME="${DOCLING_FILENAME-${item}.pdf}"
+IA_INI="${HOME}/.config/internetarchive/ia.ini"
 
 mkdir -p "$ITEM_DIR"
 
-if [ -n "$FILENAME" ]; then
-  POST_BODY=$(jq -n --arg item "$item" --arg fn "$FILENAME" '{item: $item, filename: $fn}')
-else
-  POST_BODY=$(jq -n --arg item "$item" '{item: $item}')
+# --- credential loading ---
+if [ -z "${IA_S3_NO_CREDS:-}" ]; then
+  if [ -z "${IA_S3_ACCESS_KEY:-}" ] && [ -f "$IA_INI" ]; then
+    IA_S3_ACCESS_KEY=$(awk -F'=' '/^\[s3\]/{f=1;next} /^\[/{f=0} f && /^access[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2); print $2; exit}' "$IA_INI")
+  fi
+  if [ -z "${IA_S3_SECRET_KEY:-}" ] && [ -f "$IA_INI" ]; then
+    IA_S3_SECRET_KEY=$(awk -F'=' '/^\[s3\]/{f=1;next} /^\[/{f=0} f && /^secret[[:space:]]*=/{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2); print $2; exit}' "$IA_INI")
+  fi
 fi
 
+# --- build POST body ---
+build_body() {
+  local args=(-n --arg item "$item")
+  local filter='{item: $item}'
+  if [ -n "$FILENAME" ]; then
+    args+=(--arg fn "$FILENAME"); filter="${filter} | . + {filename: \$fn}"
+  fi
+  if [ -n "${IA_S3_ACCESS_KEY:-}" ] && [ -n "${IA_S3_SECRET_KEY:-}" ]; then
+    args+=(--arg ak "$IA_S3_ACCESS_KEY" --arg sk "$IA_S3_SECRET_KEY")
+    filter="${filter} | . + {access_key: \$ak, secret_key: \$sk}"
+  fi
+  jq "${args[@]}" "$filter"
+}
+
+POST_BODY=$(build_body)
+
+# Log a redacted summary of what we're sending (don't print the body itself —
+# it may contain a secret key). Hash the body so reruns are diffable.
+REDACTED=$(echo "$POST_BODY" | jq 'if has("secret_key") then .secret_key = "<redacted>" else . end | if has("access_key") then .access_key = "<redacted>" else . end')
+echo "request body (redacted):"
+echo "$REDACTED"
+
+# Pass via stdin so creds don't appear in ps
 JOB=$(curl -sS -X POST "${API}/v1/jobs/archive-item" \
   -H 'content-type: application/json' \
-  -d "$POST_BODY" \
+  --data @- <<<"$POST_BODY" \
   | tee /dev/stderr | jq -r .job_id)
 
 echo
 echo "job: $JOB"
 
 START_TS=$(date +%s)
+RUNNING_TS=""
 while true; do
   NOW=$(date +%s)
   ELAPSED=$((NOW - START_TS))
@@ -77,6 +119,13 @@ while true; do
   echo "$RESPONSE" | json_pp
 
   STATUS=$(echo "$RESPONSE" | jq -r .status)
+
+  # Saturation metric: print the first time we leave "pending"
+  if [ -z "$RUNNING_TS" ] && [ "$STATUS" != "pending" ]; then
+    RUNNING_TS=$(date +%s)
+    DELAY=$((RUNNING_TS - START_TS))
+    echo "submit→running: ${DELAY}s" >&2
+  fi
 
   case "$STATUS" in
     succeeded|failed|partial)
