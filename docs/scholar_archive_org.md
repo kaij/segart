@@ -37,19 +37,21 @@ Entities cross-reference by `ident`, not revision, so metadata can evolve while 
 
 ## Endpoints
 
-OpenAPI spec at `https://scholar.archive.org/openapi.json`. All endpoints are GET, JSON, no auth.
+OpenAPI spec at `https://scholar.archive.org/api/fatcat/v2/docs`. All endpoints are GET, JSON, no auth.
 
-| Endpoint | Use |
-|---|---|
-| `/api/fatcat/v1/lookup_release?extid_type=doi&extid_value={doi}` | Resolve a release by DOI/PMID/PMCID/etc. |
-| `/api/fatcat/v1/lookup_container?extid_type=issnl&extid_value={issn}` | Resolve a journal container by ISSN-L. |
-| `/api/fatcat/v1/get_release/{ident}?expand=files,container` | Full release with embedded container + files. |
-| `/api/fatcat/v1/get_release_files/{ident}` | Files attached to a release. |
-| `/api/fatcat/v1/get_container/{ident}` | Container by fatcat ident. |
-| `/api/fatcat/v1/get_work/{ident}` / `/get_work_releases/{ident}` | Work entity and all its release versions. |
-| `/api/fatcat/v1/get_creator/{ident}` / `/get_creator_releases/{ident}` | Author entity and their releases. |
+| Endpoint                                                        | Use                                           |
+|-----------------------------------------------------------------|-----------------------------------------------|
+| `/api/fatcat/v2/release/lookup?id_type=doi&id_value={doi}`      | Resolve a release by DOI/PMID/PMCID/etc.      |
+| `/api/fatcat/v2/container/lookup?id_type=issnl&id_value={issn}` | Resolve a journal container by ISSN-L.        |
+| `/api/fatcat/v2/release/{ident}`                                | Full release with embedded container + files. |
+| `/api/fatcat/v2/release/files/{ident}`                          | Files attached to a release.                  |
+| `/api/fatcat/v2/container/{ident}`                              | Container by fatcat uuid.                     |
+| `/api/fatcat/v2/work/{ident}` / `/work/releases/{ident}`        | Work entity and all its release versions.     |
+| `/api/fatcat/v2/creator/{ident}` / `/creator/releases/{ident}`  | Author entity and their releases.             |
 
-Fatcat-side full-text/structured search (releases by `container_issnl` + `volume` + `issue`, etc.) is not in this OpenAPI surface; it lives in the scholar search index at `https://scholar.archive.org/search?q=...`. As of 2026-05, that endpoint is returning HTTP 405 — there is a banner in the rendered HTML noting an archive.org-wide degradation. Don't depend on `/search` for the evaluation loop until it recovers; use bulk dumps as a substitute.
+Fatcat-side full-text/structured search (releases by `container_issnl` + `volume` + `issue`, etc.) is not in this OpenAPI surface; it is exposed within IA's network at https://scholar.archive.org/_es . Fatcat indices: fatcat_file, fatcat_release, fatcat_container. Full text search over releases is in the scholar_fulltext index.
+
+Note that in Fatcat/scholar world, `container` means journal -- not an issue of a journal as in Crossref.
 
 ## Bulk dumps (preferred at scale)
 
