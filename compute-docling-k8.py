@@ -8,8 +8,8 @@ Per-item job-status response is saved alongside as <item>_docling_job.json
 for debugging.
 
 Usage:
-  ./fetch_docling.py <item>
-  ./fetch_docling.py --help
+  ./compute-docling-k8.py <item>
+  ./compute-docling-k8.py --help
 
 Defaults (each overridable via flag or env var):
   - output:       tmp/items/<item>/  (SEGART_CACHE)
