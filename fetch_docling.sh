@@ -17,6 +17,16 @@
 # hasn't reached a terminal status by then, the script exits non-zero
 # without downloading; the job continues server-side. POLL_INTERVAL_SEC
 # (default 5) controls poll cadence.
+#
+# Filename restriction: by default we pass filename="<item>.pdf" so the
+# API processes exactly the canonical Text PDF, NOT any sibling
+# *.lcpdf / *_encrypted.pdf / *.acspdf variants that would otherwise
+# match the "every PDF in the item" fanout (per OpenAPI spec). About
+# 4.3% of cached items have such DRM-wrapped sibling PDFs; processing
+# those is wasted compute and would overwrite the good output. Override
+# via DOCLING_FILENAME=<name> (or DOCLING_FILENAME="" to opt back in to
+# the every-PDF fanout, e.g. if you want to process all files in a
+# multi-PDF item).
 
 set -eo pipefail
 
@@ -34,12 +44,21 @@ ITEM_DIR="${ITEMS_DIR}/${item}"
 JOB_OUTFILE="${ITEM_DIR}/${item}_docling_job.json"
 TIMEOUT_SEC="${DOCLING_API_TIMEOUT_SEC:-1800}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
+# Empty string = let the API process every PDF in the item (fanout).
+# Default = restrict to the canonical Text PDF only.
+FILENAME="${DOCLING_FILENAME-${item}.pdf}"
 
 mkdir -p "$ITEM_DIR"
 
+if [ -n "$FILENAME" ]; then
+  POST_BODY=$(jq -n --arg item "$item" --arg fn "$FILENAME" '{item: $item, filename: $fn}')
+else
+  POST_BODY=$(jq -n --arg item "$item" '{item: $item}')
+fi
+
 JOB=$(curl -sS -X POST "${API}/v1/jobs/archive-item" \
   -H 'content-type: application/json' \
-  -d "{\"item\": \"${item}\"}" \
+  -d "$POST_BODY" \
   | tee /dev/stderr | jq -r .job_id)
 
 echo
