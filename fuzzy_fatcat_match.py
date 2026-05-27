@@ -43,14 +43,18 @@ Usage:
   ./fuzzy_fatcat_match.py --fixture fixtures.jsonl
 """
 import argparse
-import base64
 import difflib
 import json
 import re
-import sys
 import urllib.parse
 import urllib.request
-import uuid
+
+from fatcat_match import (
+    fcid_to_uuid,
+    flag_duplicates,
+    normalize_title_fuzzy,
+    release_completeness,
+)
 
 ES_BASE = "https://scholar.archive.org/_es"
 TOP_N = 10
@@ -71,22 +75,9 @@ PAGE_BONUS    = 0.15
 # candidates come back, not the local rerank score directly.
 VOLUME_ES_BOOST = 5.0
 
-# Two candidates that tie on combined score are almost always duplicate
-# fatcat records for the same article (canonical article-DOI vs page-locator-
-# DOI). We break the tie by `completeness` and flag the losers
-# `duplicate_of_top`. EPS guards against float jitter in otherwise-equal sums.
-COMBINED_TIE_EPS = 1e-9
-
 # Confidence bands for surface labels — not used to filter, just to flag
 # for review. Tunable once we see real-world distribution.
 BANDS = [(0.85, "confident"), (0.65, "review"), (0.0, "weak")]
-
-
-def fcid_to_uuid(fcid):
-    """Decode a 26-char fatcat base32 ident to its canonical UUID string."""
-    if not fcid:
-        return None
-    return str(uuid.UUID(bytes=base64.b32decode(fcid.upper() + "=" * 6)))
 
 
 def es_search(index, body):
@@ -145,18 +136,11 @@ def fetch_candidates(container_ident, title, year, volume=None):
 
 # ---- local rerank ----
 
-_PUNCT_RE = re.compile(r"[^\w\s]+", re.UNICODE)
-
-
-def normalize_title(s):
-    s = (s or "").lower()
-    s = _PUNCT_RE.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
 
 def title_similarity(a, b):
-    return difflib.SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
+    return difflib.SequenceMatcher(
+        None, normalize_title_fuzzy(a), normalize_title_fuzzy(b)
+    ).ratio()
 
 
 def extract_surnames(authors):
@@ -303,38 +287,6 @@ def page_overlap(toc_ranges, candidate_pages, candidate_first):
     return 0.0
 
 
-def _present(v):
-    """True if a field carries a meaningful (non-empty) value."""
-    if v is None:
-        return False
-    if isinstance(v, str):
-        return bool(v.strip())
-    if isinstance(v, (list, tuple, dict)):
-        return len(v) > 0
-    return True
-
-
-def completeness(src):
-    """Tiebreaker score: how fully populated a fatcat release record is.
-
-    Only consulted to order candidates that tie on `combined` — never
-    overrides it. Page-locator-DOI duplicates tend to drop `first_page`,
-    carry a malformed `pages` locator (e.g. '1782c-1782'), and use initials-
-    only author names, so they score below the canonical Crossref article
-    record. `ref_count` is in the ES schema but often 0; included because
-    when populated it's a strong canonical-record signal.
-    """
-    score = float(len(src.get("contrib_names") or []))   # author count
-    if _present(src.get("issue")):
-        score += 1.0
-    score += float(src.get("ref_count") or 0)            # reference list present
-    if _present(src.get("first_page")):
-        score += 1.0
-    if parse_page_range(src.get("pages")):               # well-formed range
-        score += 1.0
-    return score
-
-
 def band(score):
     for thresh, label in BANDS:
         if score >= thresh:
@@ -359,7 +311,7 @@ def rank(query_title, query_authors, candidates, query_volume=None,
                     + VOLUME_BONUS * vm + PAGE_BONUS * po)
         ranked.append({
             "combined":  combined,
-            "completeness": completeness(src),
+            "completeness": release_completeness(src),
             "es_score":  c["score"],
             "title_sim": ts,
             "author_sim": au,
@@ -380,14 +332,9 @@ def rank(query_title, query_authors, candidates, query_volume=None,
     # Primary sort: combined score. Secondary: completeness — only changes
     # order among combined-score ties (duplicate records for one article).
     ranked.sort(key=lambda r: (r["combined"], r["completeness"]), reverse=True)
-    # Flag any non-top candidate that ties the top on combined: downstream
-    # sees the ambiguity rather than a silently-picked winner.
-    if ranked:
-        top_combined = ranked[0]["combined"]
-        for i, r in enumerate(ranked):
-            r["duplicate_of_top"] = (
-                i > 0 and abs(r["combined"] - top_combined) <= COMBINED_TIE_EPS
-            )
+    # Flag non-top candidates that tie the top on combined so downstream sees
+    # the ambiguity rather than a silently-picked winner.
+    flag_duplicates(ranked, "combined")
     return ranked
 
 
