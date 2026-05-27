@@ -17,16 +17,31 @@ from ill_lookup import LookupRequest, lookup  # noqa: E402
 
 
 def _is_dupe(ill_id: str, mine_id: str) -> bool:
-    """sim_X vs X, X_0 vs X, sim_X_X vs sim_X — same content, different slug."""
+    """sim_X vs X, X_0 vs X, sim_X_X vs sim_X — same content, different slug.
+
+    An ID ending in a single trailing `_N` (single digit) is a scan-variant
+    marker (e.g. `sim_X_<vol>_<iss>_0`); the same physical issue may also be
+    cataloged without the marker (`sim_X_<vol>_<iss>`). Generate variants
+    with and without that trailing `_<digit>` and check for any intersection.
+    Single-digit only (not `_\\d+`) so we don't accidentally strip the issue
+    number from a base identifier like `sim_X_2010_5_3`.
+    """
     if not ill_id or not mine_id: return False
-    def collapse(s):
+
+    def variants(s: str) -> set[str]:
         s = re.sub(r"^sim_", "", s)
-        s = re.sub(r"_\d+$", "", s)
-        parts = s.split("_")
-        if len(parts) >= 4 and parts[0] == parts[1]:
-            return "_".join(parts[1:])
-        return s
-    return collapse(ill_id) == collapse(mine_id)
+        out = {s}
+        m = re.match(r"(.+)_\d$", s)
+        if m:
+            out.add(m.group(1))
+        # Doubled-name collapse: `X_X_<rest>` -> `X_<rest>`
+        for v in list(out):
+            parts = v.split("_")
+            if len(parts) >= 4 and parts[0] == parts[1]:
+                out.add("_".join(parts[1:]))
+        return out
+
+    return bool(variants(ill_id) & variants(mine_id))
 
 
 def evaluate_one(sample: dict) -> dict:
