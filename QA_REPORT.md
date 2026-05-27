@@ -972,3 +972,47 @@ All in `tmp/audit/` (gitignored — JSONL is not in repo, summary lives here):
 2. **Multi-source discovery rollout** (issue #12) — expected to lift findable rate substantially for the `not_in_crossref` 32.8%.
 3. **Expand scope beyond top-50 ISSNs** — full corpus is ~204K IA items vs the 16K sampled here. Cache infrastructure built today (`tmp/ia_metadata_cache/`, `crossref_full_cache_v2/`) makes this incremental.
 4. **`wrong_voliss` matcher tweaks** in `label_matches` — combined-issue + supplement + season normalization.
+
+## Wrong-start-leaf fix — 2026-05-22
+
+Manual QA on the v1.0.3 calibration set (Google Sheet tab v1.0.3, 24 items) showed
+8 entries across 7 issues with notes like "Wrong start n number. Page numbers
+correct - misses first page." Root cause traced to `repair_page_numbers.extract_anchors`:
+docling running headers carry the *article's* range ("Author et al. | Journal
+120 (2004) 1-10") which the extractor was interpreting as "this leaf is page 1."
+On items where the chapter-open leaf has no detectable single page number, this
+puts page 1 → leaf 5 instead of leaf 4 (off by 1).
+
+**Fix:** `extract_anchors` now also captures bare-digit page_header blocks
+("2", "3", …) as `kind="single"` anchors — the leaf's actual printed page
+number. `consistency_filter` prefers singles when ≥3 share an offset, else
+falls back to range anchors (preserved for items like jognn that only have
+running headers, no single-number page_headers).
+
+**A/B verification (24 items, baseline `tmp/tocs_fixed/` vs. patched):**
+
+- 17 entries shifted (matched by DOI/title across renumbered entries).
+- 6 are direct librarian-gold matches on previously-held entries:
+  `bio-cons_2004-11_120_1_0` (pp 1-10), `bio-cons_2004-08_118_5` (pp 559-571),
+  `personality-and-individual-differences` (pp 775-784), `human-comm-research`
+  (pp 157-206), `child-psych_52_6` (pp 557-558), `bio-cons_2013-10_166`
+  (pp 303-303).
+- Most remaining shifts were verified via docling content as improvements
+  (including 2 end-of-article references-recovery shifts on `bio-cons_1990_51_1`
+  and a misplaced-Crossref-data fix on `jognn` "Your Right/Write to Appeal").
+- **Known regression on `ans_1978-10_1_1` "From the editor" (held item):** baseline
+  n6-n9 was librarian-confirmed correct (docling shows the article body opens at
+  n6); patched gives n14-n14 (wrong — n14 is "A Model for Theory Development").
+  Root cause: `ans_1978` is restart-pagination, so the pipeline bypasses pn.json
+  and trusts docling. With the patch, docling-singles' offset (13, derived from
+  later articles) overrides the range-anchor offset (4) that previously gave the
+  correct leaf for the first article. The pn_health gate already marks this item
+  as restart-pagination but doesn't currently gate it OUT of heur_xref.
+
+A separate test changing the scandata/docling/pn.json merge order to put
+scandata first regressed `ans_1978` even more broadly. Per-journal source
+quality varies; no fixed dominance order is correct globally.
+
+**Open question:** add a restart-pagination guard to the patch (revert to range-
+anchor behavior when pn_health says restart) OR build the v2 issue confidence
+score so restart-pagination items are gated to LLM before they reach heur_xref.

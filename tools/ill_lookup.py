@@ -499,6 +499,31 @@ def strategy_toc(ctx: ItemContext, req: LookupRequest) -> Optional[LookupResult]
     try:
         start_n = int(start_s.lstrip("n")); end_n = int(end_s.lstrip("n"))
     except Exception: return None
+    # Override start/end leaves when the ILL request has printed pages we
+    # can translate via scandata/pn.json/docling (ctx.printed_to_br). The
+    # patron's citation is authoritative; published TOCs sometimes truncate
+    # end-leaves to a section-header span, or even store start-leaf as the
+    # TOC table page itself rather than the article body. Title-match is
+    # only used to pick the right ENTRY; leaves come from the request when
+    # available, fall back to TOC otherwise.
+    pmap = {}
+    try: pmap = ctx.printed_to_br
+    except Exception: pass
+    start_from_request = end_from_request = None
+    if pages and pmap:
+        if pages[0]:
+            v = pmap.get(str(pages[0]))
+            if v is not None: start_from_request = int(v)
+        if len(pages) >= 2 and pages[1]:
+            v = pmap.get(str(pages[1]))
+            if v is not None: end_from_request = int(v)
+    if start_from_request is not None:
+        start_n = start_from_request
+    if end_from_request is not None and end_from_request >= start_n:
+        end_n = end_from_request
+    # Ensure end >= start regardless of where the numbers came from
+    if end_n < start_n:
+        end_n = start_n
     # TOC entry quality — heuristic TOCs carry confidence and needs_qa flags.
     entry_conf = float(best.get("confidence") or 0.5)
     needs_qa = bool(best.get("needs_qa"))
