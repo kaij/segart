@@ -10,11 +10,13 @@ indices via PageIndex.
 
 Usage:
     uv run extract_toc_docling.py <item> [-v] [--out PATH] [--min-entries N]
+    uv run extract_toc_docling.py <item> --vlm [--vlm-model MODEL] [--vlm-api-url URL]
 
 Output:
     <item>_toc.json  (or <item>_toc_docling.json if _toc.json already exists)
 """
 import argparse
+import base64
 import gzip
 import json
 import os
@@ -500,6 +502,129 @@ def locate_unanchored(d: dict, unanchored: list, toc_pages: set,
     return located
 
 
+# ----------------------------------------------------------------- VLM path --
+
+_VLM_SYSTEM = """\
+Extract table of contents entries from journal page images.
+Return ONLY valid JSON: {"entries": [{"title": "...", "authors": [{"name": "..."}], "page_number": <int or null>}]}
+Rules:
+- title: exact article title only, no author names
+- authors: author names without credentials (Ph.D., R.N., M.D., Ed.D., M.A., M.S. etc.)
+- page_number: printed page integer if visible, null if absent
+- Skip: section headers, editorials without byline, advertisements, editorial-board tables
+"""
+
+
+def _render_toc_pages(item: str, cache_dir: Path, toc_pages: set) -> list:
+    """Render Docling-detected TOC pages to 150 DPI JPEG.
+
+    Returns list of (docling_page_no, Path) tuples.
+    Caches renders so repeat runs skip re-rendering.
+    """
+    import pymupdf
+    from segment_issue_docling import fetch_pdf
+
+    pdf = fetch_pdf(item, cache_dir)
+    pages_dir = cache_dir / item / "pages"
+    pages_dir.mkdir(exist_ok=True)
+    doc = pymupdf.open(str(pdf))
+    out = []
+    try:
+        for pg in sorted(toc_pages):  # pg is 1-indexed Docling page
+            path = pages_dir / f"toc_p{pg:04d}.jpg"
+            if not path.exists():
+                page = doc[pg - 1]  # 0-indexed in PyMuPDF
+                mat = pymupdf.Matrix(150 / 72, 150 / 72)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                pix.save(str(path), output="jpeg", jpg_quality=85)
+            out.append((pg, path))
+    finally:
+        doc.close()
+    return out
+
+
+def _call_vlm(image_paths: list, model: str, api_base_url: str,
+              api_key: str | None = None, verbose: bool = False) -> list:
+    """Send TOC page images to a local OpenAI-compatible VLM and return raw entry dicts."""
+    from openai import OpenAI
+
+    client = OpenAI(base_url=api_base_url, api_key=api_key or "no-key")
+
+    content = []
+    for _, path in image_paths:
+        data = base64.standard_b64encode(path.read_bytes()).decode()
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{data}"},
+        })
+    content.append({"type": "text", "text": "Extract the table of contents entries."})
+
+    resp = client.chat.completions.create(
+        model=model,
+        max_tokens=2048,
+        messages=[
+            {"role": "system", "content": _VLM_SYSTEM},
+            {"role": "user", "content": content},
+        ],
+    )
+    raw = (resp.choices[0].message.content or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
+    if verbose:
+        print(f"  VLM raw: {raw[:300]!r}", file=sys.stderr)
+    try:
+        return json.loads(raw).get("entries", [])
+    except json.JSONDecodeError as e:
+        print(f"  WARN: VLM returned invalid JSON: {e}", file=sys.stderr)
+        return []
+
+
+def vlm_extract_toc_pages(d: dict, toc_pages: set, item: str, cache_dir: Path,
+                           model: str, api_base_url: str, api_key: str | None = None,
+                           verbose: bool = False) -> tuple[list, list]:
+    """Render TOC pages, call VLM, split into (anchored, unanchored).
+
+    VLM entries carry _evidence and _confidence fields for assemble_entries().
+    """
+    image_paths = _render_toc_pages(item, cache_dir, toc_pages)
+    if not image_paths:
+        return [], []
+    if verbose:
+        print(f"  VLM: sending {len(image_paths)} TOC page(s) to {model}",
+              file=sys.stderr)
+
+    raw = _call_vlm(image_paths, model=model, api_base_url=api_base_url,
+                    api_key=api_key, verbose=verbose)
+
+    anchored, unanchored = [], []
+    first_page = image_paths[0][0] if image_paths else None
+
+    for e in raw:
+        title = (e.get("title") or "").strip()
+        if not title:
+            continue
+        authors_raw = ", ".join(
+            a.get("name", "") for a in (e.get("authors") or [])
+        )
+        pn = e.get("page_number")
+        rec = {
+            "title": title,
+            "authors_raw": authors_raw,
+            "src_docling_page": first_page,
+            "_evidence": ["docling_toc", "vlm"],
+            "_confidence": 0.90,
+        }
+        if isinstance(pn, int):
+            rec["printed_page"] = pn
+            anchored.append(rec)
+        else:
+            unanchored.append(rec)
+
+    if verbose:
+        print(f"  VLM: {len(anchored)} anchored, {len(unanchored)} unanchored",
+              file=sys.stderr)
+    return anchored, unanchored
+
+
 # ----------------------------------------------------------- author parsing --
 
 def parse_toc_authors(authors_raw: str) -> list:
@@ -548,8 +673,8 @@ def assemble_entries(anchored: list, located_unanchored: list,
             "authors": parse_toc_authors(e["authors_raw"]),
             "start_br": start_br,
             "start_pp": str(e["printed_page"]),
-            "confidence": 0.85,
-            "evidence": ["docling_toc"],
+            "confidence": e.get("_confidence", 0.85),
+            "evidence": e.get("_evidence", ["docling_toc"]),
         })
 
     for e in located_unanchored:
@@ -557,13 +682,15 @@ def assemble_entries(anchored: list, located_unanchored: list,
         if doc_page is None:
             continue
         start_br = max(0, doc_page - 1)  # Docling 1-indexed → BR 0-indexed (approx)
+        base_ev = e.get("_evidence", ["docling_toc"])
+        evidence = base_ev + ["body_search"] if "body_search" not in base_ev else base_ev
         raw.append({
             "title": e["title"],
             "authors": parse_toc_authors(e["authors_raw"]),
             "start_br": start_br,
             "start_pp": br_to_printed.get(start_br),
-            "confidence": 0.65,
-            "evidence": ["docling_toc", "body_search"],
+            "confidence": e.get("_confidence", 0.65),
+            "evidence": evidence,
         })
 
     # Deduplicate on normalized title prefix
@@ -627,6 +754,16 @@ def main():
                    help="Minimum anchored entries to accept a TOC cluster (default 3)")
     p.add_argument("--device", choices=("mps", "cpu"), default="mps",
                    help="Docling accelerator for cache-miss conversion")
+    p.add_argument("--vlm", action="store_true",
+                   help="Use local VLM for TOC extraction via OpenAI-compatible endpoint")
+    p.add_argument("--vlm-model", default="granite-vision-4.1", metavar="MODEL",
+                   help="VLM model name (default: granite-vision-4.1)")
+    p.add_argument("--vlm-api-url",
+                   default=os.environ.get("VLM_API_BASE_URL", "http://localhost:8000/v1"),
+                   metavar="URL", help="OpenAI-compatible API base URL (default: http://localhost:8000/v1)")
+    p.add_argument("--vlm-api-key",
+                   default=os.environ.get("VLM_API_KEY") or os.environ.get("OPENAI_API_KEY"),
+                   metavar="KEY", help="API key (default: VLM_API_KEY or OPENAI_API_KEY env var)")
     args = p.parse_args()
 
     cache_dir = Path(args.cache_dir)
@@ -674,19 +811,32 @@ def main():
         print(f"ERROR: no TOC detected for {args.item}", file=sys.stderr)
         sys.exit(1)
 
+    # 5. Optional VLM re-extraction (replaces table-cell path for title/author quality)
+    if args.vlm and toc_pages:
+        anchored, unanchored = vlm_extract_toc_pages(
+            d, toc_pages, args.item, cache_dir,
+            model=args.vlm_model, api_base_url=args.vlm_api_url,
+            api_key=args.vlm_api_key, verbose=args.verbose)
+        if not anchored and not unanchored:
+            print("  WARN: VLM returned no entries; falling back to table-cell results",
+                  file=sys.stderr)
+            # re-run table extraction to restore original anchored/unanchored
+            anchored, unanchored, _ = extract_toc_from_tables(
+                d, min_entries=args.min_entries, verbose=False)
+
     if args.verbose:
         print(f"  anchored: {len(anchored)}, unanchored (for body search): {len(unanchored)}",
               file=sys.stderr)
 
-    # 5. Body-search for unanchored entries
+    # 6. Body-search for unanchored entries
     located = locate_unanchored(d, unanchored, toc_pages, verbose=args.verbose) \
         if unanchored else []
 
-    # 6. Assemble final entries
+    # 7. Assemble final entries
     entries = assemble_entries(anchored, located, printed_to_br, br_to_printed,
                                visible_count, verbose=args.verbose)
 
-    # 7. Build output
+    # 8. Build output
     toc = {
         "schema_version": SCHEMA_VERSION,
         "item": args.item,
@@ -708,7 +858,7 @@ def main():
         "entries": entries,
     }
 
-    # 8. Determine output path
+    # 9. Determine output path
     if args.out:
         out_path = Path(args.out)
     else:
