@@ -8,37 +8,26 @@ Inputs:
 Match priority:
   1. ISSN — pub.issn against container.{issnl, issne, issnp}
   2. sim_pubid — pub.sim_pubid against container.extra.ia.sim.sim_pubid
-  3. Normalized title — exact match after lowercase/punct-strip; with
-     publisher tie-break when multiple containers share the title.
+  3. Normalized title — exact match after lowercase/punct-strip; with a
+     publisher tie-break, then a record-completeness tie-break (emitted as
+     method "title+completeness") when multiple containers share the title.
 
 Emits one JSONL line per pub collection (matched or not) so the gap is
 visible.
+
+Shared matching primitives (ident decode, title normalization, the
+completeness tiebreak) live in fatcat_match.py, alongside fuzzy_fatcat_match.py.
 """
 import argparse
 import gzip
 import json
-import re
 import sys
 
-STOPWORDS = {
-    "the", "a", "an", "of", "and", "in", "on", "for", "to",
-    "la", "le", "les", "der", "die", "das", "el", "los", "il",
-}
-
-
-def normalize_title(t):
-    if not t:
-        return None
-    t = t.lower()
-    t = re.sub(r"[^a-z0-9]+", " ", t)
-    words = [w for w in t.split() if w and w not in STOPWORDS]
-    return " ".join(words) if words else None
-
-
-def first_str(v):
-    if isinstance(v, list):
-        return v[0] if v else None
-    return v
+from fatcat_match import (
+    container_completeness,
+    first_str,
+    normalize_title_key as normalize_title,
+)
 
 
 def load_fatcat_indexes(path):
@@ -66,9 +55,15 @@ def load_fatcat_indexes(path):
                 by_sim_pubid.setdefault(str(sim_pubid), ident)
             nt = normalize_title(c.get("name"))
             if nt:
-                by_title.setdefault(nt, []).append(
-                    {"ident": ident, "publisher": c.get("publisher")}
-                )
+                by_title.setdefault(nt, []).append({
+                    "ident": ident,
+                    "publisher": c.get("publisher"),
+                    "issnl": c.get("issnl"),
+                    "issne": c.get("issne"),
+                    "issnp": c.get("issnp"),
+                    "sim_pubid": sim_pubid,
+                    "wikidata_qid": c.get("wikidata_qid"),
+                })
     return n, by_issn, by_sim_pubid, by_title
 
 
@@ -94,6 +89,15 @@ def match(pub, by_issn, by_sim_pubid, by_title):
                 cp = (c.get("publisher") or "").lower()
                 if cp and (cp in pub_publisher or pub_publisher in cp):
                     return c["ident"], "title+publisher", nt
+        # Multiple containers, no publisher tie-break. Rather than give up,
+        # prefer the most fully populated container (empirically the canonical
+        # one) when it's a strict winner, under a distinct method label so
+        # consumers can choose whether to trust completeness-resolved matches.
+        by_completeness = sorted(candidates, key=container_completeness,
+                                 reverse=True)
+        if container_completeness(by_completeness[0]) > container_completeness(
+                by_completeness[1]):
+            return by_completeness[0]["ident"], "title+completeness", nt
         return None, "title_ambiguous", nt
 
     return None, None, None

@@ -15,9 +15,11 @@ For segart these need to be linked bidirectionally: starting from an IA periodic
 
 1. **ISSN** → container_id (using `issnl`, `issne`, `issnp`).
 2. **`sim_pubid`** → container_id (where present).
-3. **Normalized title** → list of `(container_id, publisher)`. Normalization lowercases, strips non-alphanumeric characters, and drops a small stopword list.
+3. **Normalized title** → list of `(container_id, publisher, …identifiers)`. Normalization lowercases, strips non-alphanumeric characters, and drops a small stopword list.
 
-For each pub, it tries those keys in priority order and records the match method plus the evidence used. When a normalized title matches multiple fatcat containers, it tries to disambiguate on publisher; if that fails, the match is flagged `title_ambiguous` and not used.
+For each pub, it tries those keys in priority order and records the match method plus the evidence used. When a normalized title matches multiple fatcat containers, it tries to disambiguate on publisher; if that fails, it falls back to a container-completeness tie-break — preferring the record with more identifiers populated (`issnl`/`issne`/`issnp`, `sim_pubid`, `wikidata_qid`, `publisher`), which is empirically the canonical container — and records it as `title+completeness`. Only when completeness *also* ties is the match flagged `title_ambiguous` and not used.
+
+The ident decode, title normalization, and the completeness tie-break live in the shared `fatcat_match.py` module (also used by `fuzzy_fatcat_match.py` for article→release matching).
 
 OCLC URNs from `external-identifier` are intentionally not used — that data is too noisy for a reliable join.
 
@@ -49,11 +51,11 @@ The unmatched gap is real and worth working on: foreign-language journals with d
 }
 ```
 
-`match_method` is one of `issn | sim_pubid | title | title+publisher | title_ambiguous | null`. `null` means no candidate was found at all.
+`match_method` is one of `issn | sim_pubid | title | title+publisher | title+completeness | title_ambiguous | null`. `title+completeness` is a title match where multiple containers tied and publisher didn't disambiguate, resolved by preferring the more fully populated container — it carries a real `container_id` but is lower-confidence than the methods above it. `null` means no candidate was found at all.
 
 ## How to use the result
 
-- **Pub → fatcat**: filter for `match_method ∈ {issn, sim_pubid, title, title+publisher}` and use `container_id` to look up release candidates for any IA issue under that pub.
+- **Pub → fatcat**: filter for `match_method ∈ {issn, sim_pubid, title, title+publisher}` and use `container_id` to look up release candidates for any IA issue under that pub. `title+completeness` rows also carry a resolved `container_id`; include them only when you want broader recall and accept the title was ambiguous.
 - **Fatcat → pub**: invert the join (group by `container_id`) to find the IA pub collection — and via that, the scanned issues — for a given fatcat container.
 - **Coverage tracking**: the `null` and `title_ambiguous` rows are the gap to chip away at — better title normalization, transliteration, and per-language stopword lists would all help.
 

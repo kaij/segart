@@ -1,19 +1,21 @@
 # segart per-item articles file: `<item>_articles.json.gz`
 
-A bibliographic-enrichment companion to `<item>_toc.json`. One file per IA periodical issue, gzipped JSON, holding everything we know about each article in the issue from external metadata sources (Crossref, fatcat, OpenAlex, Unpaywall, PubMed).
+A bibliographic-enrichment companion to `<item>_toc.json`. One file per IA periodical issue, gzipped JSON, holding everything we know about each article in the issue from external metadata sources (Crossref, fatcat, OpenAlex, Unpaywall, PubMed) plus per-entry Crossmark / Funder Registry / relation 1-hop / Event Data enrichments.
 
 `_toc.json` answers *"where in the scan is each article."*
 `_articles.json.gz` answers *"what does the world know about each article."*
 
 See [`toc_format.md`](./toc_format.md) for the TOC file. The two are linked by **`toc_entry_id`** (the `e1`, `e2`, … ordinals defined in `_toc.json`).
 
+**Schema version: 2** (current). For the v1 → v2 migration plan, see the [Migration](#migration-v1--v2) section.
+
 ## Why distinct from `_toc.json`
 
 | | `_toc.json` | `_articles.json.gz` |
 |---|---|---|
 | Source of truth for | Segmentation (page-index ranges per entry) | Bibliographic metadata per entry |
-| Updated when | Re-segmentation pass runs | External dumps refresh |
-| Size | ~5–20 KB / issue | ~80–200 KB / issue (gzipped: ~30–60 KB) |
+| Updated when | Re-segmentation pass runs | External dumps refresh, or per-entry enrichment runs |
+| Size | ~5–20 KB / issue | ~150–600 KB / issue gzipped; outliers up to several MB |
 | Required for an item | Yes | No (optional enrichment) |
 | Primary consumers | BookReader, IA UI | Researchers, downstream pipelines |
 
@@ -22,346 +24,246 @@ Bundling them would couple two very different update cadences and force lightwei
 ## Naming and storage
 
 - Filename: `<item>_articles.json.gz` — sibling of `<item>_toc.json` in the IA item file group.
-- Compression: gzip on upload (Crossref `reference[]` and `abstract` compress ~6×).
+- Compression: gzip on upload (Crossref `reference[]`, `abstract`, and inline Event Data compress ~6×).
 - Encoding: UTF-8 JSON.
-- Updates: re-derive when either (a) `_toc.json` is regenerated or (b) any source dump is refreshed.
+- Updates: re-derive when either (a) `_toc.json` is regenerated or (b) any source dump is refreshed or (c) any per-entry enrichment is re-run.
 
-## Full schema (v1)
+## Top-level schema
 
 ```jsonc
 {
-  "schema_version": 1,
-  "ia_item": "sim_new-england-journal-of-medicine_1961-12-28_265_26",
+  "schema_version": 2,
+  "ia_item": "sim_biological-conservation_2010-11_143_11",
 
-  // pin which _toc.json snapshot this articles file matches.
-  // if these don't agree with the current _toc.json, this file is stale.
-  "toc_schema_version": 1,
-  "toc_generated_at": "2026-05-09T13:00:00Z",
+  // Pin which _toc.json snapshot this articles file matches. If these don't
+  // agree with the current _toc.json, this file is stale.
+  "toc_schema_version": 2,
+  "toc_generated_at": "2026-05-21T13:00:00Z",
 
-  // ~18% of journals: bonus from Crossref type:journal-issue records
-  "issue_doi": null,
-  "special_issue_title": null,
-  "issue_editors": [],
+  // Full Crossref `type:journal-issue` deposit, when one exists. The block IS
+  // the raw Crossref record (Crossref field names, no segart wrapping).
+  // null when the journal doesn't deposit issue DOIs (~82% of journals).
+  "issue_meta": {
+    "DOI": "10.1016/s0006-3207(10)00012-3",
+    "type": "journal-issue",
+    "title": ["Special Issue: Conservation in Fragmented Landscapes"],
+    "subtitle": [],
+    "editor": [
+      { "given": "Lenore", "family": "Fahrig", "sequence": "first" },
+      { "given": "Adina", "family": "Merenlender", "sequence": "additional" }
+    ],
+    "published-print":  { "date-parts": [[2010, 11]] },
+    "published-online": { "date-parts": [[2010, 8, 14]] },
+    "subject": ["Nature and Landscape Conservation", "Ecology"],
+    "link": [{ "URL": "...", "content-type": "text/html" }]
+    /* ... every other field Crossref returned ... */
+  },
+
+  // Full Crossref `type:journal-volume` deposit, when one exists. Rare; mostly
+  // review serials (Advances in X, Annual Review of Y).
+  "volume_meta": null,
+
+  // True iff any entry in this issue has `retracted: true`. Lets BookReader /
+  // IA UI surface a per-issue badge without walking entries.
+  "has_retracted_entries": false,
 
   "provenance": {
-    "generated_at": "2026-05-09T14:00:00Z",
-    "generator": { "name": "segart-annotate", "version": "0.1" },
+    "generated_at": "2026-05-21T14:00:00Z",
+    "generator": { "name": "segart-annotate", "version": "1.1.0" },
     "sources": {
-      "crossref":  { "via": "public_data_file",         "dump_date": "2026-03" },
-      "fatcat":    { "via": "release_export_expanded",  "dump_date": "2024-02-18" },
-      "openalex":  { "via": "snapshot",                 "dump_date": "2026-04" },
-      "unpaywall": { "via": "snapshot",                 "dump_date": "2026-04" },
-      "pubmed":    { "via": "baseline",                 "dump_date": "2026-01" }
-    }
-  },
-
-  "license_notes": {
-    "shell": "CC0 / public domain. Crossref bibliographic metadata is treated as facts under US law.",
-    "abstracts": "Crossref-deposited abstracts retain the original publisher/author copyright. Stored here as an indexable convenience; downstream redistribution may inherit per-publisher terms.",
-    "fatcat":  "CC0",
-    "openalex": "CC0",
-    "unpaywall": "CC0",
-    "pubmed": "US government work, public domain"
-  },
-
-  // one entry per _toc.json entry, keyed by toc_entry_id.
-  // every TOC entry is mirrored, even if no upstream record was found.
-  "entries": {
-    "e1": {
-      "toc_entry_id": "e1",
-
-      "ext_ids": {
-        "doi":             "10.1056/NEJM196112282652601",
-        "pmid":            "14462856",
-        "pmcid":           null,
-        "arxiv":           null,
-        "fatcat_release":  "dtoonyptt5d2layb4nlokwk6he",
-        "fatcat_work":     "esjkikobxva5hidsopmsygjaie",
-        "openalex":        "W2104895729"
-      },
-      "match_method": "doi_lookup",
-      "match_confidence": 1.0,
-
-      "match_signature": {
-        "first_page_index": "n26",
-        "title_hash": "sha1:abcd1234...",
-        "first_page": 1273
-      },
-
-      // ----- Crossref: full payload -----
-      // Crossref /works/{doi} JSON, verbatim, with the following stripped because
-      // they live in the pub_ collection (or the issue.json):
-      //   container-title, short-container-title, ISSN, issn-type, publisher,
-      //   member, prefix, source
       "crossref": {
-        "DOI": "10.1056/NEJM196112282652601",
-        "type": "journal-article",
-        "title": ["Bacteriologic Flora of the Lower Respiratory Tract"],
-        "subtitle": [],
-        "original-title": [],
-        "short-title": [],
-        "author": [
-          { "given": "Gustave A.", "family": "Laurenzi", "sequence": "first",
-            "ORCID": null, "affiliation": [{ "name": "Seton Hall College of Medicine" }] }
-        ],
-        "editor": [],
-        "translator": [],
-        "abstract": "<jats:p>...</jats:p>",
-        "subject": ["Medicine"],
-        "volume": "265",
-        "issue": "26",
-        "page": "1273-1278",
-        "article-number": null,
-        "published-print":  { "date-parts": [[1961, 12, 28]] },
-        "published-online": null,
-        "issued":           { "date-parts": [[1961, 12, 28]] },
-        "created":          { "date-parts": [[2007, 1, 4]], "date-time": "..." },
-        "deposited":        { "date-parts": [[2020, 5, 1]],  "date-time": "..." },
-        "indexed":          { "date-parts": [[2026, 3, 1]],  "date-time": "..." },
-        "license": [
-          { "URL": "...", "content-version": "vor",
-            "delay-in-days": 0, "start": { "date-parts": [[1961,12,28]] } }
-        ],
-        "funder": [
-          { "name": "NIH", "DOI": "10.13039/100000002", "award": ["AI-12345"] }
-        ],
-        "reference": [
-          { "key": "B1", "DOI": "10.1056/...", "unstructured": "Smith J. ...",
-            "author": "Smith", "year": "1958", "journal-title": "...", "volume": "...",
-            "first-page": "..." }
-        ],
-        "reference-count": 42,
-        "is-referenced-by-count": 287,
-        "update-to":   [],          // retractions / corrections / errata
-        "update-policy": null,
-        "relation":    {},          // is-version-of, has-preprint, etc.
-        "assertion":   [],          // peer-review status, copyright statements
-        "link": [
-          { "URL": "...", "content-type": "application/pdf",
-            "content-version": "vor", "intended-application": "similarity-checking" }
-        ],
-        "alternative-id": [],
-        "URL": "https://doi.org/10.1056/NEJM196112282652601",
-        "language": "en",
-        "clinical-trial-number": []
+        "via": "public_data_file",  // or "live_api_cached" / "openalex_snapshot"
+        "dump_date": "2026-01",
+        "type_filter": null          // explicit: we fetched ALL types
       },
-
-      // ----- fatcat: slim, file linkage only -----
-      "fatcat": {
-        "release_ident": "dtoonyptt5d2layb4nlokwk6he",
-        "work_ident":    "esjkikobxva5hidsopmsygjaie",
-        "container_ident": "td5cjnem25b35nugn4qftmwcna",
-        "release_stage": "published",
-        "files": [
-          {
-            "ident":    "...",
-            "sha1":     "...",
-            "md5":      "...",
-            "size":     412034,
-            "mimetype": "application/pdf",
-            "urls": [
-              { "url": "https://archive.org/download/sim_.../article.pdf",
-                "rel": "archive" }
-            ]
-          }
-        ]
-      },
-
-      // ----- OpenAlex: slim -----
-      "openalex": {
-        "id": "https://openalex.org/W2104895729",
-        "concepts": [
-          { "id": "...", "display_name": "Pulmonary embolism", "level": 3, "score": 0.62 }
-        ],
-        "topics": [
-          { "id": "...", "display_name": "Respiratory infections", "score": 0.71 }
-        ],
-        "cited_by_count": 287,
-        "counts_by_year": [{ "year": 2024, "cited_by_count": 4 }],
-        "open_access": {
-          "is_oa": false,
-          "oa_status": "closed",
-          "oa_url": null,
-          "any_repository_has_fulltext": false
-        },
-        "authorships": [
-          { "author": { "id": "...", "display_name": "Gustave A. Laurenzi",
-                        "orcid": null },
-            "institutions": [
-              { "id": "...", "display_name": "Seton Hall College of Medicine",
-                "ror": "https://ror.org/...", "country_code": "US" }
-            ],
-            "is_corresponding": true }
-        ]
-      },
-
-      // ----- Unpaywall: slim -----
-      "unpaywall": {
-        "is_oa":           false,
-        "oa_status":       "closed",
-        "best_oa_url":     null,
-        "best_oa_license": null,
-        "best_oa_version": null,
-        "has_repository_copy": false
-      },
-
-      // ----- PubMed: slim, biomedical only (null for non-biomed) -----
-      "pubmed": {
-        "pmid":  "14462856",
-        "pmcid": null,
-        "mesh": [
-          { "id": "D000208", "term": "Acute Disease",
-            "major": false, "qualifiers": [] }
-        ],
-        "publication_types": ["Journal Article"],
-        "structured_abstract": null,
-        "grants": []
-      }
-    },
-
-    "e2": {
-      "toc_entry_id": "e2",
-      "ext_ids": { "fatcat_release": "abc123..." },
-      "match_method": "fuzzy_title_volume_issue",
-      "match_confidence": 0.78,
-      "match_signature": { "first_page_index": "n31", "title_hash": "sha1:...", "first_page": 1278 },
-      "crossref":  null,
-      "fatcat":    { "release_ident": "abc123...", "files": [] },
-      "openalex":  null,
-      "unpaywall": null,
-      "pubmed":    null
-    },
-
-    "e3": {
-      "toc_entry_id": "e3",
-      "ext_ids": {},
-      "match_method": "no_match",
-      "match_confidence": 0.0,
-      "_note": "Older microfilm; no Crossref/fatcat record found."
-    },
-
-    "e4": {
-      "toc_entry_id": "e4",
-      "ext_ids": {},
-      "match_method": "skip",
-      "_note": "Advertisement; not attempting bibliographic match."
+      "fatcat":          { "via": "release_export_expanded",   "dump_date": "2026-02-18" },
+      "openalex":        { "via": "openalex_snapshot",         "dump_date": "2026-04" },
+      "unpaywall":       { "via": "snapshot",                  "dump_date": "2026-04" },
+      "pubmed":          { "via": "baseline",                  "dump_date": "2026-01" },
+      "crossmark":       { "via": "live_api_cached",           "fetched_at": "2026-05-21" },
+      "funder_registry": { "via": "live_api_cached",           "fetched_at": "2026-05-21" },
+      "event_data":      { "via": "live_api_cached",           "fetched_at": "2026-05-21" }
     }
+  },
+
+  "license_notes": { /* see License notes section below */ },
+
+  "entries": { "e1": {...}, "e2": {...}, ... }
+}
+```
+
+## Per-entry schema
+
+```jsonc
+"e7": {
+  "toc_entry_id": "e7",
+
+  "ext_ids": {
+    "doi":            "10.1016/j.biocon.2010.08.015",
+    "pmid":           "...",
+    "pmcid":          null,
+    "arxiv":          null,
+    "fatcat_release": "...",
+    "fatcat_work":    "...",
+    "openalex":       "W..."
+  },
+
+  // Top-level fields surfaced for direct consumer access without drilling into
+  // source blobs. Originals stay in their source blobs too — these are
+  // convenience copies for entry-level browse / facet / display.
+  "entry_type": "editorial",                // derived from crossref.type — primary classifier worth fast access
+  "title":      "Conservation in the 21st Century",  // canonical, picked across crossref/openalex/pubmed
+  "abstract":   "<jats:p>...</jats:p>",     // canonical, raw JATS from crossref (preferred) or reconstructed from openalex.abstract_inverted_index; DO NOT TRANSFORM
+  "subjects":   ["Ecology"],                // copy of crossref.subject[]
+  "topics":     [...],                      // copy of openalex.topics[]
+  "concepts":   [...],                      // copy of openalex.concepts[]
+  "retracted":  false,                      // derived from crossref.update-to + crossref.update-policy
+
+  "match_method": "doi_lookup",
+  "match_confidence": 1.0,
+
+  // ----- Crossref: FULL payload, no fields stripped -----
+  "crossref": { /* every field /works/{doi} returns */ },
+
+  // ----- fatcat: FULL release record -----
+  "fatcat":   { /* every field /release/{ident} returns + files */ },
+
+  // ----- OpenAlex: FULL Work record -----
+  "openalex": { /* every field /works/{id} returns */ },
+
+  // ----- Unpaywall: FULL record -----
+  "unpaywall": { /* every field /v2/{doi} returns */ },
+
+  // ----- PubMed: FULL XML-parsed record (when biomed) -----
+  "pubmed":   { /* every PubMed XML field */ },
+
+  // ----- Crossmark detail (when retracted/corrected) -----
+  // Populated only if crossref.update-policy is set or crossref.update-to[] is non-empty.
+  "crossmark": {
+    "version": "1.2",
+    "assertions": [
+      { "name": "publication_history",
+        "value": "Received: 2010-03-01; Accepted: 2010-08-12; Published: 2010-11-15" },
+      { "name": "peer_review",
+        "value": "Single-blind external peer review" }
+    ],
+    "updates": [
+      { "type": "correction",
+        "DOI":  "10.1016/j.biocon.2011.02.003",
+        "updated": { "date-parts": [[2011, 2, 15]] },
+        "label": "Erratum to..." }
+    ]
+  },
+
+  // ----- Funder Registry expansion -----
+  // For each funder DOI in crossref.funder[], one-hop expansion.
+  "funders_expanded": [
+    {
+      "DOI":        "10.13039/100000002",
+      "name":       "National Institutes of Health",
+      "alt_names":  ["NIH", "U.S. National Institutes of Health"],
+      "country":    "United States",
+      "parent":     null,
+      "geonames":   { "id": "6252001", "name": "United States" }
+    }
+  ],
+
+  // ----- relation[] one-hop traversal -----
+  // For each entry in crossref.relation (has-preprint, is-version-of,
+  // has-translation, is-supplemented-by, ...), fetch related DOI's metadata.
+  // One-hop only — we don't follow the related work's own relations.
+  "relations_expanded": [
+    {
+      "relation_type": "has-preprint",
+      "target_doi":    "10.1101/2010.05.20.123456",
+      "target_meta":   { "title": [...], "type": "posted-content", "issued": {...} }
+    }
+  ],
+
+  // ----- Event Data lookup (CURRENTLY DISABLED) -----
+  // Citations / mentions in blog posts, Wikipedia, news, etc.
+  // Crossref Event Data was sunset on 2026-04-23. The API is gone; a
+  // one-time historical archive is request-only from Crossref support.
+  // Once we obtain and mirror that archive (see issue #8), this block
+  // will populate from the local mirror. Until then, this field is
+  // absent on all entries.
+  //
+  // Schema kept as documentation for the post-mirror state:
+  "event_data": {
+    "total_events": 47,
+    "sources": { "wikipedia": 3, "news": 12, "blog": 8, "twitter": 24 },
+    "events": [
+      { "source": "wikipedia",
+        "obj_url": "https://en.wikipedia.org/wiki/...",
+        "occurred_at": "2018-03-15T12:00:00Z",
+        "subj_id": "wikipedia:...",
+        "evidence_url": "...",
+        /* ... every other field Crossref Event Data returned per event ... */
+      }
+      /* ... up to total_events events ... */
+    ]
   }
 }
 ```
 
-## Top-level fields
+## When a source has no data
 
-| Field | Type | Notes |
-|---|---|---|
-| `schema_version` | int | Bumped on breaking changes. |
-| `ia_item` | str | The IA item identifier. |
-| `toc_schema_version` | int | Schema version of the `_toc.json` this was built against. |
-| `toc_generated_at` | ISO 8601 | `_toc.json` `generated_at` value at build time. Mismatch with current TOC = stale. |
-| `issue_doi` | str \| null | From Crossref `type:journal-issue` record (~18% of journals). |
-| `special_issue_title` | str \| null | From the issue-DOI record. |
-| `issue_editors` | array | Per-issue editors from the issue-DOI record. |
-| `provenance` | object | Generator + per-source dump metadata. |
-| `license_notes` | object | Free-text notes on license posture per source. See license section below. |
-| `entries` | object | Map: `toc_entry_id` → entry record. One per `_toc.json` entry. |
+`null` for any source means "no record found for this entry". Absence vs. null is non-significant — both are valid. Consumers MUST tolerate either.
 
-## Per-entry fields
+## `entry_type` values
 
-| Field | Type | Notes |
-|---|---|---|
-| `toc_entry_id` | str | Echoes the key. |
-| `ext_ids` | object | All known IDs for this article: `doi`, `pmid`, `pmcid`, `arxiv`, `fatcat_release`, `fatcat_work`, `openalex`. Any subset, all optional. |
-| `match_method` | enum | How this entry was tied to upstream data. See enum below. |
-| `match_confidence` | float `[0,1]` | Confidence in the match (1.0 for `doi_lookup`, lower for fuzzy). |
-| `match_signature` | object \| null | `{first_page_index, title_hash, first_page}` — used to re-tie if `_toc.json` IDs shift. |
-| `crossref` | object \| null | Full Crossref `/works/{doi}` payload, periodical fields stripped. |
-| `fatcat` | object \| null | Slim — release/work idents, container ident, files[]. |
-| `openalex` | object \| null | Slim — concepts, topics, citation counts, OA, authorships. |
-| `unpaywall` | object \| null | Slim — OA status, best URL, license. |
-| `pubmed` | object \| null | Slim — PMID, MeSH, pub types. Null for non-biomed. |
+From `crossref.type`. Values seen in the wild (extensible):
 
-`null` for a source means "no match found for this entry"; absence vs. null is not significant.
+| Value | Notes |
+|---|---|
+| `journal-article` | the bulk of `entries` |
+| `editorial` | editorials, commentaries — routinely DOI'd by medical journals |
+| `review-article` | review papers; (in)consistent across publishers |
+| `book-review` | journal-published book reviews |
+| `book-chapter` | book chapters appearing in journal-issue-style venues |
+| `proceedings-article` | conference papers in journal-issue supplements |
+| `letter` | letters to the editor |
+| `report` | technical reports, "Reports" sections |
+| `other` | corrections, news, calls-for-papers, miscellany |
+
+Note: `journal-issue` and `journal-volume` records are NOT in `entries` — they're routed to `issue_meta` and `volume_meta` respectively.
+
+Consumers MUST tolerate unknown `entry_type` values gracefully.
 
 ## `match_method` enum
 
 | Value | Meaning |
 |---|---|
-| `doi_lookup` | TOC entry had a DOI → exact lookup in dumps. Confidence = 1.0. |
+| `doi_lookup` | TOC entry had a DOI → exact lookup. Confidence = 1.0. |
+| `doi_from_crossref` | Crossref `/journals/{issn}/works` enumeration matched by (vol, iss). Confidence = 1.0. |
 | `pmid_lookup` | TOC entry had a PMID → exact lookup. Confidence = 1.0. |
-| `fuzzy_title_volume_issue` | No exact ID; matched fatcat by `(container, volume, issue)` + fuzzy title. Confidence per match score. |
-| `pubmed_title_match` | Matched PubMed by title within journal+year. Confidence per score. |
+| `fuzzy_title_volume_issue` | No exact ID; matched fatcat by `(container, volume, issue)` + fuzzy title. |
+| `pubmed_title_match` | Matched PubMed by title within journal+year. |
 | `no_match` | Search attempted, nothing found. |
 | `skip` | Did not attempt match (ads, frontmatter, etc.). |
 
-Extensible. Consumers MUST tolerate unknown values.
+`match_method` and `match_confidence` are always required, even when the value is implicit (e.g. confidence = 1.0 for `doi_lookup`). Consumers can rely on these fields always being present.
 
-## Per-source subobject specs
+## Sidecar files
 
-### `crossref`
+None — all data lives inline in `<item>_articles.json.gz`. Outlier issues (viral papers with 10K+ Event Data events, heavily-cited articles with 80 KB `reference[]`) inflate file size; accepted as the cost of "everything in one file."
 
-Stored as the verbatim Crossref `/works/{doi}` JSON, with these fields **stripped** because they belong to the `pub_*` collection or are otherwise redundant:
+## Size implications
 
-- `container-title`, `short-container-title`
-- `ISSN`, `issn-type`
-- `publisher`, `member`, `prefix`, `source`
+Typical v2 issue file: **~150–600 KB compressed**, driven by:
 
-Everything else from the Crossref record is preserved, including the full `reference[]` array and the `abstract` (subject to the license note below).
+- Per-entry full Crossref blob (including reference[] and abstract)
+- Per-entry full OpenAlex Work record
+- Per-entry full fatcat / unpaywall / pubmed records
+- `issue_meta` (~3–5 KB raw / ~1 KB compressed) when present
+- `volume_meta` (~3–5 KB raw / ~1 KB compressed) when present
+- Crossmark per retracted/corrected article (~3 KB raw, sparse)
+- `funders_expanded` (~1 KB per funder × few funders per article)
+- `relations_expanded` (~5 KB per related work × sparse)
+- `event_data` inline events (~0.3 KB per event × per-entry total; typical entries 0–50 events)
+- Convenience flat fields (small — they're copies of data already in the blob)
 
-### `fatcat`
-
-Slim projection. Only the fields needed for IA file linkage and entity round-trips.
-
-| Field | Notes |
-|---|---|
-| `release_ident` | Stable fatcat release ID. |
-| `work_ident` | Stable fatcat work ID. |
-| `container_ident` | Stable fatcat container ID for the journal. |
-| `release_stage` | `published`, `accepted`, `submitted`, etc. |
-| `files[]` | `{ident, sha1, md5, size, mimetype, urls[]}` — the file artifacts; `urls[]` may include archive.org direct download links. |
-
-Drop everything else fatcat carries (refs, abstracts, contribs) — those are richer in Crossref / OpenAlex.
-
-### `openalex`
-
-Slim projection. The fields where OpenAlex adds genuinely new info beyond Crossref.
-
-| Field | Notes |
-|---|---|
-| `id` | OpenAlex Work ID (full URL). |
-| `concepts[]` | OpenAlex's older concept taxonomy. |
-| `topics[]` | OpenAlex's newer topic taxonomy (Wikidata-linked). |
-| `cited_by_count` | Forward-citation count. |
-| `counts_by_year[]` | Citation counts bucketed by year. |
-| `open_access` | OA status, URL, repository availability. |
-| `authorships[]` | Author + institution disambiguation, with ROR IDs. |
-
-Drop everything OpenAlex re-shapes from Crossref (title, authors raw names, etc.) — keep canonical Crossref versions instead.
-
-### `unpaywall`
-
-Slim. Just the OA status fields.
-
-| Field | Notes |
-|---|---|
-| `is_oa` | Boolean. |
-| `oa_status` | `gold`, `green`, `bronze`, `hybrid`, `closed`. |
-| `best_oa_url` | URL to the best OA copy, if any. |
-| `best_oa_license` | License of the best OA copy. |
-| `best_oa_version` | `publishedVersion`, `acceptedVersion`, `submittedVersion`. |
-| `has_repository_copy` | Boolean. |
-
-### `pubmed`
-
-Biomedical only — null for non-biomed entries. Filled when a Crossref DOI maps to a PMID, or when a TOC entry was matched directly to PubMed.
-
-| Field | Notes |
-|---|---|
-| `pmid` | PubMed ID. |
-| `pmcid` | PubMed Central ID, when present. |
-| `mesh[]` | Medical Subject Headings — `{id, term, major, qualifiers[]}`. The single highest-value enrichment for biomed. |
-| `publication_types[]` | PubMed pub type tags. |
-| `structured_abstract` | When PubMed has a structured (BACKGROUND/METHODS/…) form distinct from Crossref's flat abstract. |
-| `grants[]` | NIH/funder grant info, when present. |
+**Outliers:** medical/biomed journals with rich Crossmark + many funders + heavy citation activity push toward ~1 MB. An issue containing viral-era papers (e.g. early-2020 COVID issues) with 10K+ Event Data events per entry could reach **several MB**. Accepted as the cost of "all data in one file."
 
 ## License notes
 
@@ -371,31 +273,73 @@ The `license_notes` field is informational; it does not override per-record `lic
 - **Abstracts**: deposited by publishers, retain original copyright. We store them as an indexing convenience; downstream redistribution inherits per-publisher terms.
 - **Fatcat, OpenAlex, Unpaywall**: CC0.
 - **PubMed**: US government work, public domain.
+- **Crossref Event Data**: CC0 per Crossref's Event Data terms.
+- **Funder Registry**: CC0.
 
 ## Update cadence and coupling
 
-The articles file is a **function** of (current `_toc.json`) × (current source dumps). Re-derive when either changes.
+The articles file is a **function** of (current `_toc.json`) × (current source dumps + enrichments). Re-derive when any input changes.
 
 - **Re-segmentation invalidates this file.** When `_toc.json` is regenerated, re-run the bibliographic join. The DOI lookups are O(1) hash lookups against locally-cached dumps; cost is negligible compared to OCR or LLM extraction.
-- **Dump refresh.** Crossref publishes annually; OpenAlex / Unpaywall monthly. Refresh cadence is a deployment policy decision, not a schema concern.
+- **Dump refresh.** Crossref and OpenAlex publish snapshots; mirrored to IA annually (see issue #8). Refresh cadence is a deployment policy decision, not a schema concern.
+- **Per-entry enrichments (Crossmark / Funder Registry / relation / Event Data) cache by DOI.** Re-fetch policy: refresh on next regeneration if older than N days (TBD).
 - **Staleness detection.** A consumer comparing `toc_generated_at` here vs. the live `_toc.json` `generated_at` can tell at a glance whether the articles file is current.
-
-## Backfill against `_toc.json` IDs that shift
-
-If `_toc.json` is re-segmented and entry IDs reshuffle (`e1` becomes `e2`, etc.), the articles file becomes invalid by ID. Two recovery paths:
-
-1. **Re-derive from scratch** (preferred). Cheap once dumps are local.
-2. **Re-tie via `match_signature`.** Each entry caches `{first_page_index, title_hash, first_page}`. A best-effort matcher can recover tied identities even if `e1`/`e2` shifted, without re-running the bibliographic join.
 
 ## Extension policy
 
 - Extra top-level fields and extra per-entry fields are allowed; consumers MUST ignore unknown fields.
-- Adding a new value to `match_method` is non-breaking.
+- Adding a new value to `match_method` or `entry_type` is non-breaking.
 - Adding a new source (e.g. `semantic_scholar`) is a new top-level entry under `provenance.sources` and a new per-entry subobject; non-breaking.
 - Removing or renaming an existing field bumps `schema_version`.
 
+## What changed from v1
+
+v2 is a hard cutover — every existing v1 file is rebuilt at v2 and replaced. No backward-compat work.
+
+| Change | Rationale |
+|---|---|
+| `schema_version: 1 → 2` | makes the cutover explicit; consumers branch on version |
+| Drop `type:journal-article` fetch filter | capture `journal-issue`, `journal-volume`, editorials, book-reviews, proceedings-articles, errata — every DOI registered for the issue |
+| Drop `strip_periodical()` | keep `container-title`, `short-container-title`, `ISSN`, `issn-type`, `publisher`, `member`, `prefix`, `source` per-article so they're aggregable to `pub_*` collection level (see issue #1) |
+| Remove v1's `issue_doi`/`special_issue_title`/`issue_editors` thin fields | replaced by full `issue_meta` block |
+| New top-level `issue_meta` block | populated from Crossref `type:journal-issue` deposit |
+| New top-level `volume_meta` block | populated from Crossref `type:journal-volume` deposit |
+| New top-level `has_retracted_entries` flag | per-issue retraction badge without walking entries |
+| New per-entry `entry_type` field | echoes `crossref.type` at entry top level |
+| New per-entry convenience flat fields | `title`, `abstract` (raw JATS), `subjects`, `topics`, `concepts`, `retracted` — copies/derivations from source blobs for direct access |
+| Per-source blobs no longer "slim" | v1 docs claimed openalex/unpaywall/pubmed/fatcat were slim projections; implementation has been storing full blobs since v1.0.2. v2 codifies "full blob per source." |
+| New per-entry enrichments | Crossmark detail, Funder Registry expansion, relation 1-hop traversal, Event Data lookup — "we want everything Crossref has" (see issue #1 scope decision) |
+| Abstract stored as raw JATS XML, never transformed | preserve structure; downstream renders/strips as needed |
+| All upstream dates kept in their native format | `_articles.json.gz` is supposed to preserve raw; segart's own dates use ISO-8601 |
+| Drop v1's per-entry `match_signature` | v1 used it to re-tie entries when TOC IDs reshuffled; v2's hard cutover rebuilds from scratch, recovery path moot |
+| Drop v1's per-entry free-text `_note` | rarely populated, awkward to consume; if a human annotation is needed in the future, add a structured field rather than freeform text |
+| `entries` stays a dict keyed by `e1`, `e2`, … | stable IDs let `_toc.json` reference entries reliably across rebuilds |
+| `match_method` and `match_confidence` stay required even for `doi_lookup` | uniformity beats 4-byte savings per entry |
+| `journal_meta` lives on `pub_*` collection items, NOT in `_articles.json.gz` | journal-level data belongs at journal level, not per-issue — see issue #1 |
+
+Out of scope for v2:
+- ❌ Crossref full-text content (publisher-URL gated, not our role)
+- ❌ Crossref cited-by full list (Plus account required, defer)
+- ❌ Per-issue author-record expansion (use `pub_*`-level author cache instead)
+
+## Migration: v1 → v2
+
+Hard cutover. Every existing v1 `_articles.json.gz` on IA gets rebuilt at v2 and replaced. Consumers branch on `schema_version` and the v1 branch can be deleted once the rebuild completes.
+
+Steps:
+
+1. Refetch year-level `crossref_full_cache/` with no type filter
+2. Build v2 `_articles.json.gz` for new items
+3. Rebuild v2 files for the existing 911 articles_pilot + 24 heur_xref-fix items, replacing them on IA atomically with a paired review post per the three-file provenance rule
+4. Update consumers to read v2 (surface convenience fields, display `issue_meta.title` and `issue_meta.editor[]`, handle non-`journal-article` entry types)
+5. Delete v1-only code paths
+
+No grace period for mixed v1/v2 files in production — the rebuild step is the cutover.
+
 ## Open questions
 
-- **Reference list size**: Crossref `reference[]` for a heavily-cited article can be 30–80 KB on its own. At 6M issues × ~8 articles, this is the dominant cost. We embed it (per the design call) — but a future v2 might offer a `reference_count_only` mode for tight-storage deployments.
-- **Continuations across issues**: an article split across two issues currently appears in both `_toc.json` files. Whether the articles file should mark `is_continuation_of: <other_item>/<other_entry_id>` is unresolved.
-- **Multi-DOI entries**: a TOC entry that maps to multiple DOIs (rare; multi-part article registered separately) currently stores just one. Schema could accommodate a list, but the cost-benefit for the rare case is unclear.
+1. **Multi-DOI entries**: a TOC entry mapping to multiple DOIs (multi-part article, very rare). v1's `ext_ids.doi` is singular; v2 keeps it singular. Defer until a real case shows up.
+
+2. **Continuations across issues**: an article split across two issues currently appears in both `_toc.json` files. Whether the articles file should mark `is_continuation_of: <other_item>/<other_entry_id>` is unresolved.
+
+3. **JSON Schema document**: should we publish a JSON Schema for v2 alongside this prose doc? Useful for downstream validation, but adds maintenance burden. Decision deferred until v2 ships and we see actual consumer needs.

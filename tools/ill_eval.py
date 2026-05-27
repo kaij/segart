@@ -4,6 +4,10 @@ Reads samples JSONL (one ILL fulfilment per line with ground-truth
 ill_item / ill_start / ill_stop + request fields) and runs the library's
 lookup against each, then prints a categorised + confidence-banded
 summary.
+
+With --refine, on triggered rows we additionally call ill_lookup_refine.refine
+to let Claude consult hOCR / docling / scandata / printed-pages-map / page-image
+tools and confirm or refine the prediction (see tools/ill_lookup_refine.py).
 """
 from __future__ import annotations
 import argparse, json, sys, re
@@ -13,23 +17,40 @@ from pathlib import Path
 
 SEGART = Path("/Users/brewster/tmp/segart")
 sys.path.insert(0, str(SEGART / "tools"))
-from ill_lookup import LookupRequest, lookup  # noqa: E402
+from ill_lookup import LookupRequest, LookupResult, lookup  # noqa: E402
 
 
 def _is_dupe(ill_id: str, mine_id: str) -> bool:
-    """sim_X vs X, X_0 vs X, sim_X_X vs sim_X — same content, different slug."""
+    """sim_X vs X, X_0 vs X, sim_X_X vs sim_X — same content, different slug.
+
+    An ID ending in a single trailing `_N` (single digit) is a scan-variant
+    marker (e.g. `sim_X_<vol>_<iss>_0`); the same physical issue may also be
+    cataloged without the marker (`sim_X_<vol>_<iss>`). Generate variants
+    with and without that trailing `_<digit>` and check for any intersection.
+    Single-digit only (not `_\\d+`) so we don't accidentally strip the issue
+    number from a base identifier like `sim_X_2010_5_3`.
+    """
     if not ill_id or not mine_id: return False
-    def collapse(s):
+
+    def variants(s: str) -> set[str]:
         s = re.sub(r"^sim_", "", s)
-        s = re.sub(r"_\d+$", "", s)
-        parts = s.split("_")
-        if len(parts) >= 4 and parts[0] == parts[1]:
-            return "_".join(parts[1:])
-        return s
-    return collapse(ill_id) == collapse(mine_id)
+        out = {s}
+        m = re.match(r"(.+)_\d$", s)
+        if m:
+            out.add(m.group(1))
+        # Doubled-name collapse: `X_X_<rest>` -> `X_<rest>`
+        for v in list(out):
+            parts = v.split("_")
+            if len(parts) >= 4 and parts[0] == parts[1]:
+                out.add("_".join(parts[1:]))
+        return out
+
+    return bool(variants(ill_id) & variants(mine_id))
 
 
-def evaluate_one(sample: dict) -> dict:
+def evaluate_one(sample: dict, refine_enabled: bool = False,
+                 refine_model: str | None = None,
+                 refine_max_tool_calls: int = 8) -> dict:
     req = LookupRequest(
         issn=sample["issn"], vol=sample["vol"], iss=sample["iss"],
         yr=sample["yr"], pages=sample["pages"],
@@ -48,6 +69,46 @@ def evaluate_one(sample: dict) -> dict:
         "evidence": [e for e in r.evidence if isinstance(e, str)],
         "error": r.error,
     }
+
+    # Optional Claude refinement on uncertain baselines
+    if refine_enabled:
+        from ill_lookup_refine import refine, should_refine, DEFAULT_MODEL
+        try:
+            triggered, reason = should_refine(req, r)
+            if triggered:
+                rr = refine(req, r,
+                            model=refine_model or DEFAULT_MODEL,
+                            max_tool_calls=refine_max_tool_calls)
+                out["refine"] = {
+                    "decision": rr.decision,
+                    "raw_start": rr.raw_refined_start,
+                    "raw_end": rr.raw_refined_end,
+                    "confidence": rr.confidence,
+                    "evidence": rr.evidence,
+                    "tools_called": rr.tools_called,
+                    "trigger_reason": rr.trigger_reason,
+                    "error": rr.error,
+                    "tokens": {
+                        "input": rr.input_tokens,
+                        "cache_read": rr.cache_read_input_tokens,
+                        "cache_creation": rr.cache_creation_input_tokens,
+                        "output": rr.output_tokens,
+                    },
+                }
+                # Adopt refined leaves only when the refiner says "refine" AND
+                # gives both endpoints. confirm_baseline / abstain → leave as-is.
+                if rr.decision == "refine" and rr.start is not None and rr.end is not None:
+                    out["pre_refine_start"] = out["start"]
+                    out["pre_refine_end"] = out["end"]
+                    out["pre_refine_strategy"] = out["strategy"]
+                    out["start"] = rr.start
+                    out["end"] = rr.end
+                    out["strategy"] = f"refined/{r.strategy or 'base'}"
+                    # refined predictions are higher confidence than baseline
+                    # only when the model says so — use the refiner's value
+                    out["confidence"] = max(rr.confidence, r.confidence)
+        except Exception as e:
+            out["refine"] = {"error": f"{type(e).__name__}:{str(e)[:200]}"}
     # Categorise
     if not r.picked_item:
         out["category"] = "no_item"
@@ -75,15 +136,26 @@ def main():
     ap.add_argument("samples", help="JSONL with ground-truth samples")
     ap.add_argument("--out", default=None, help="output JSONL (default: samples.eval.jsonl)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--refine", action="store_true",
+                    help="After lookup(), call ill_lookup_refine.refine on "
+                         "uncertain rows; Claude can call tools and refine "
+                         "the prediction.")
+    ap.add_argument("--refine-model", default=None,
+                    help="Anthropic model for --refine (default: Sonnet 4.6).")
+    ap.add_argument("--refine-max-tool-calls", type=int, default=8)
     args = ap.parse_args()
 
     samples = [json.loads(l) for l in open(args.samples)]
     out_path = Path(args.out or (args.samples + ".eval.jsonl"))
-    print(f"evaluating {len(samples)} samples → {out_path}", flush=True)
+    note = " [+refine]" if args.refine else ""
+    print(f"evaluating {len(samples)} samples → {out_path}{note}", flush=True)
 
     results = []
-    with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(evaluate_one, s): s for s in samples}
+    refine_workers = min(args.workers, 4) if args.refine else args.workers
+    with ThreadPoolExecutor(max_workers=refine_workers) as ex:
+        futs = {ex.submit(evaluate_one, s, args.refine,
+                          args.refine_model, args.refine_max_tool_calls): s
+                for s in samples}
         n = 0
         for fut in as_completed(futs):
             try: r = fut.result()

@@ -2,6 +2,16 @@
 
 Generated 2026-05-14 08:53 — **149** items published, **77** entries flagged across **58** items.
 
+## Status as of 2026-05-22
+
+The flagged-entries content below is from the 2026-05-14 heurxref-pilot QA run. Three later sections document subsequent work:
+
+- **Buggy-cache fix — 2026-05-20/21** ([jump](#buggy-cache-fix--2026-05-20--21)): 24 pilot items re-published from the full year-level Crossref cache.
+- **v2 cutover — 2026-05-21** ([jump](#v2-cutover--2026-05-21)): hard v1→v2 schema cutover for every published `_articles.json.gz` on IA (935 items = 911 articles_pilot + 24 heur_xref-fix). 935/935 ok.
+- **Findability audit — 2026-05-22** ([jump](#findability-audit--2026-05-22)): production-aware ILL-anchored audit across top-50 ISSNs (16,225 items, 23,659 anchors). 62.5% findable via current Crossref pipeline; 68 publisher-year cells classified clean tier.
+
+Total IA periodical items with segart `_articles.json.gz` as of this write: **1,060** (149 heurxref pilot + 911 articles_pilot, all overlapping with the v2 rebuild). 125 heurxref pilot items not in the buggy-24 set are still at v1; queued for a follow-up batch.
+
 ## Flag breakdown
 
 - **co-located**: 26 — multiple Crossref entries share a start page-index AND title (typically end-of-issue announcements, repeated-title book reviews, or front-matter pairs).
@@ -786,3 +796,223 @@ Item: https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-0
 - https://www-drini.archive.org/details/sim_psychiatry_1956-08_19_3_0?admin=1
 - https://www-drini.archive.org/details/sim_psychology-in-the-schools_1986-04_23_2?admin=1
 - https://www-drini.archive.org/details/sim_rural-special-education-quarterly_fall-2012_31_3?admin=1
+
+## Buggy-cache fix — 2026-05-20 / 21
+
+A per-issue Crossref cache truncation bug caused 24 items in the pilot batch above to be published with incomplete TOCs (some articles missing). Diagnosed via `tmp/audit/suspect_items_from_bug_cache.json`; cross-validated by `tmp/audit/additional_suspects.json` (125 matches, 0 mismatches outside the 24).
+
+Fix: re-ran `heur_xref` against the year-level full Crossref cache (`tools/rerun_with_full_cache.py`) and re-published all three artifacts atomically per [[per_item_toc_review_provenance]] — `_toc.json` + `_articles.json.gz` + IA review — via `tools/regen_buggy_24.py`. Pilot of 1 ran 2026-05-20; batch of remaining 23 ran 2026-05-21 (4 workers).
+
+Result: **24/24 ok**, full per-item record in `tmp/audit/regen_buggy_24_results.json`. Prior versions preserved on IA at `history/files/*.~N~`. New review on each item: _"TOC corrected: regenerated from full Crossref data (prior version had articles missing due to a cache-truncation bug)."_
+
+Items re-published (toc/articles entry count after fix):
+
+- [sim_american-journal-of-sports-medicine_march-april-1989_17_2](https://archive.org/details/sim_american-journal-of-sports-medicine_march-april-1989_17_2?admin=1) — 27
+- [sim_biological-conservation_2001-08_100_2](https://archive.org/details/sim_biological-conservation_2001-08_100_2?admin=1) — 12
+- [sim_biological-conservation_2003-08_112_3](https://archive.org/details/sim_biological-conservation_2003-08_112_3?admin=1) — 18
+- [sim_biological-conservation_2004-06_117_5](https://archive.org/details/sim_biological-conservation_2004-06_117_5?admin=1) — 12
+- [sim_biological-conservation_2004-08_118_5](https://archive.org/details/sim_biological-conservation_2004-08_118_5?admin=1) — 15
+- [sim_biological-conservation_2004-11_120_1_0](https://archive.org/details/sim_biological-conservation_2004-11_120_1_0?admin=1) — 20
+- [sim_biological-conservation_2010-01_143_1](https://archive.org/details/sim_biological-conservation_2010-01_143_1?admin=1) — 37
+- [sim_biological-conservation_2010-02_143_2](https://archive.org/details/sim_biological-conservation_2010-02_143_2?admin=1) — 31
+- [sim_biological-conservation_2010-03_143_3](https://archive.org/details/sim_biological-conservation_2010-03_143_3?admin=1) — 35
+- [sim_biological-conservation_2010-04_143_4](https://archive.org/details/sim_biological-conservation_2010-04_143_4?admin=1) — 31
+- [sim_biological-conservation_2010-05_143_5](https://archive.org/details/sim_biological-conservation_2010-05_143_5?admin=1) — 37
+- [sim_biological-conservation_2010-07_143_7](https://archive.org/details/sim_biological-conservation_2010-07_143_7?admin=1) — 34
+- [sim_biological-conservation_2010-08_143_8](https://archive.org/details/sim_biological-conservation_2010-08_143_8?admin=1) — 13
+- [sim_biological-conservation_2010-09_143_9](https://archive.org/details/sim_biological-conservation_2010-09_143_9?admin=1) — 37
+- [sim_biological-conservation_2010-10_143_10](https://archive.org/details/sim_biological-conservation_2010-10_143_10?admin=1) — 17
+- [sim_biological-conservation_2010-11_143_11](https://archive.org/details/sim_biological-conservation_2010-11_143_11?admin=1) — 53 (pilot, 2026-05-20)
+- [sim_biological-conservation_2010-12_143_12](https://archive.org/details/sim_biological-conservation_2010-12_143_12?admin=1) — 12
+- [sim_biological-conservation_biological-conservation_2013-06_162](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-06_162?admin=1) — 14
+- [sim_biological-conservation_biological-conservation_2013-07_163](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-07_163?admin=1) — 12
+- [sim_biological-conservation_biological-conservation_2013-10_166](https://archive.org/details/sim_biological-conservation_biological-conservation_2013-10_166?admin=1) — 34
+- [sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6](https://archive.org/details/sim_journal-american-academy-child-adolescent-psychiatry_2013-06_52_6?admin=1) — 21
+- [sim_marine-biology_1991-02_108_1](https://archive.org/details/sim_marine-biology_1991-02_108_1?admin=1) — 22
+- [sim_personality-and-individual-differences_2002-04-05_32_5_0](https://archive.org/details/sim_personality-and-individual-differences_2002-04-05_32_5_0?admin=1) — 15
+- [sim_physician-and-sportsmedicine_1983-03_11_3](https://archive.org/details/sim_physician-and-sportsmedicine_1983-03_11_3?admin=1) — 26
+
+## v2 cutover — 2026-05-21
+
+The published `_articles.json.gz` schema bumped from v1 to v2 today, replacing every existing v1 file on IA. See [`docs/articles_format.md`](docs/articles_format.md) for the full schema.
+
+### What v2 adds over v1
+
+- Drops the `type:journal-article` fetch filter — captures `journal-issue`, `journal-volume`, editorials, book-reviews, errata, proceedings-articles, book-chapters, and every other DOI Crossref has for the (issn, vol, iss). The first non-article record of type `journal-issue` is routed to a top-level `issue_meta` block; `journal-volume` to `volume_meta`.
+- Drops `strip_periodical()` — every per-article Crossref record keeps `container-title`, `short-container-title`, `ISSN`, `issn-type`, `publisher`, `member`, `prefix`, `source` (the journal-level fields can now be aggregated to `pub_*` collection items — see issue #1).
+- Adds top-level `has_retracted_entries` boolean.
+- Adds per-entry convenience fields (derived from source blobs for direct access): `entry_type`, `title`, `abstract` (raw JATS, never transformed), `subjects`, `topics`, `concepts`, `retracted`.
+- Adds Pass A enrichments per entry: `crossmark` (derivation from Crossref's update-policy/update-to/assertion fields), `funders_expanded` (per funder DOI via `/funders/{doi}`), `relations_expanded` (one-hop traversal of `crossref.relation` via `/works/{doi}`). Event Data was in scope but Crossref sunset the API on 2026-04-23 (see issue #8) — `event_data` slot reserved in the schema for when the historical archive lands.
+- Strict-mode source fetches: any 429/503 retries with backoff honoring `Retry-After`; permanent 4xx/5xx or post-retry failure raises and fails the item build (no silent best-effort).
+- Bumps `segart_version` to `1.1.0`.
+
+### Scope and result
+
+| Pipeline | Items | Result |
+|---|---|---|
+| `articles_pilot.py --force` (data-first, no TOC) | 911 | **911/911 ok**, 0 failures, wall time ~9.8 min |
+| `regen_buggy_24.py` (TOC-driven via `build_articles_companion`) | 24 | **24/24 ok**, 0 failures |
+| **Total v2 rebuild** | **935** | **935/935 ok** |
+
+Per-item checkpoints: `tmp/audit/v2_rebuild_911_checkpoint.jsonl` and `tmp/audit/regen_buggy_24_results.json`.
+
+### Verification
+
+`tools/verify_v2_uploads.py` was used to sample-verify: it polls each item's IA catalog tasks until in-flight uploads commit, then downloads the file and asserts `schema_version == 2`. **229 items sample-verified, 229/229 ok, 0 failures** before stopping the run. The remaining 706 weren't worth rigorous verification — `ia upload` is reliable and the 935/935 build-time checkpoints are the canonical record. Sample results in `tmp/audit/v2_verify_results.jsonl`.
+
+### Out of scope (deferred)
+
+- Other 125 heur_xref pilot items not in the buggy-24 set — still at v1. They have TOCs and can be rebuilt at v2 with `build_articles_companion` against `tmp/tocs_fixed/`-equivalent TOC files. Not blocking; tracked for a follow-up batch.
+- `_toc.json` schema bump — TOC files still at their existing schema; v2 only changes `_articles.json.gz`.
+
+### Related commits (this session)
+
+- `f64779f` — promote v2 schema to canonical `docs/articles_format.md`
+- `a954c41` — articles_pilot produces v2
+- `8674a8d` — v2 shared helpers + build_articles_companion + rerun_with_full_cache
+- `eb95ab5` — Pass A enrichments + strict error handling
+- `5db0634` — strict-mode year-cache fetch + prewarm driver
+- `6279e22` — `--force` flag + verify_v2_uploads
+
+## Findability audit — 2026-05-22
+
+Production-aware audit answering issue #11: *which (publisher × year-bucket) and (journal × year-bucket) sets of our scanned periodicals have high % of ILL requests findable via the current Crossref-based TOC pipeline?*
+
+### Method
+
+`tools/findability_audit.py` evaluates each ILL anchor against the heur_xref pipeline's exact behavior:
+
+1. Use `anchor.identifier` to grab the IA item (the librarian's actual fulfillment target).
+2. Pull IA metadata for the item — authoritative `(issn, vol, iss, year)`.
+3. Fetch Crossref's full year-level record set for `(issn, year)` (v2 cache, no type filter).
+4. Score the anchor against records in scope:
+   - In-issue best-title match (≥ 0.5 alone, or ≥ 0.3 with author surname OR page-range overlap ±1, or ≥ 0.2 with author + small issue) → **success** (the pipeline would include the article).
+   - In-journal-year but different vol/iss with strong title match → **wrong_voliss** (article in Crossref but pipeline routes it elsewhere; tunable: combined-issue, supplement, season labels).
+   - No plausible match → **not_in_crossref** (true Crossref coverage gap).
+
+### Scope
+
+Top-50 ISSNs by ILL anchor count → 16,225 unique IA items → 23,659 anchors scored. Wall time 2h 11m.
+
+### Per-anchor verdicts
+
+| Verdict | Count | % |
+|---|---|---|
+| `success` (pipeline would include) | **14,782** | **62.5%** |
+| `not_in_crossref` (Crossref gap) | 7,755 | 32.8% |
+| `wrong_voliss` (pipeline-tunable) | 1,122 | 4.7% |
+
+Plus 4,178 items skipped (1,867 with no Crossref records, 1,503 with no vol/iss in IA metadata, 766 Crossref fetch failures after retries, 42 other).
+
+### Tier counts (min 10 anchors per cell)
+
+| Tier | Journal-year cells | Publisher-year cells |
+|---|---|---|
+| **clean (≥95%)** | 105 | **68** |
+| **near (80–94%)** | 53 | 50 |
+| mid (50–79%) | 100 | 91 |
+| bad (<50%) | 140 | 108 |
+| low_anchor (<10 anchors) | 128 | 100 |
+
+### Top-15 clean publisher × year-bucket cells
+
+All at 100% findable (every ILL anchor in cell is captured by the current pipeline):
+
+| Publisher | Year-bucket | Anchors |
+|---|---|---|
+| Taylor & Francis Ltd | 2005–2009 | 202 |
+| Taylor & Francis Ltd | 2000–2004 | 119 |
+| Pergamon Press Inc. | 1985–1989 | 85 |
+| Wiley Subscription Services, Inc. | 1985–1989 | 84 |
+| Blackwell Publishing Ltd. | 2005–2009 | 82 |
+| Journal of Bone and Joint Surgery, Inc. | 1980–1984 | 77 |
+| Taylor & Francis Group | 2005–2009 | 76 |
+| Cambridge University Press | 1995–1999 | 75 |
+| Cambridge University Press | 1990–1994 | 74 |
+| American Occupational Therapy Association, Inc. | 1995–1999 | 67 |
+| Taylor & Francis Group | 1995–1999 | 64 |
+| Cambridge University Press | 1980–1984 | 61 |
+| Taylor & Francis Group | 1990–1994 | 58 |
+| American Occupational Therapy Association, Inc. | 2000–2004 | 57 |
+| Taylor & Francis Ltd | 1995–1999 | 57 |
+
+### Top-10 near-clean publisher × year-bucket cells
+
+| Publisher | Year-bucket | Anchors | Findable |
+|---|---|---|---|
+| Pergamon Press Inc. | 1990–1994 | 177 | 94.92% |
+| Taylor & Francis Group | 2010–2014 | 96 | 93.75% |
+| Journal of Bone and Joint Surgery, Inc. | 1975–1979 | 80 | 93.75% |
+| American Veterinary Medical Association | 1995–1999 | 267 | 93.63% |
+| American Psychiatric Publishing, Inc. | 2010–2014 | 77 | 93.51% |
+| Taylor & Francis Ltd. | 2005–2009 | 101 | 93.07% |
+| American Psychiatric Publishing, Inc. | 1995–1999 | 71 | 92.96% |
+| Blackwell Publishing Ltd. | 1975–1979 | 14 | 92.86% |
+| Pergamon Press Inc. | 2000–2004 | 78 | 92.31% |
+| American Society for Clinical Nutrition, Inc. | 1975–1979 | 63 | 92.06% |
+
+### Observations
+
+- **Publisher-name normalization needed.** Taylor & Francis appears as `Taylor & Francis Ltd`, `Taylor & Francis Group`, and `Taylor & Francis Ltd.` — same publisher, three rows. Same for several others. A canonical-name pass would consolidate cells and likely promote more to clean tier.
+- **32.8% `not_in_crossref` is the Crossref-only ceiling**, not the true ceiling. Per a sampled probe of 8 `not_in_crossref` anchors (issue #12 comment), PubMed and OpenAlex by (issn, vol, iss) recover 7/8 — most of the gap is older content with no Crossref DOI but with PMID / OpenAlex entries. The multi-source workflow in issue #12 (Phase 2 = PubMed, Phase 3 = OpenAlex) is expected to lift overall findability from ~63% toward ~90%+.
+- **`wrong_voliss` (4.7%) is small and pipeline-tunable.** Combined-issue handling (`5/6`), supplement labels (`Suppl 1`, `S1`), and season-name normalization in `label_matches` would capture most.
+
+### Output artifacts
+
+All in `tmp/audit/` (gitignored — JSONL is not in repo, summary lives here):
+
+- `findability_per_anchor.jsonl` — 23,659 anchor verdicts, one per line
+- `findability_by_journal_year.jsonl` — 526 (issn, year-bucket) cells, ranked by findable_rate
+- `findability_by_publisher_year.jsonl` — 417 (publisher, year-bucket) cells, ranked
+- `findability_top50_issns_scope.txt` — the input scope (16,280 IA items)
+
+### Next steps
+
+1. **Publisher-name normalization** before downstream consumers read the publisher table.
+2. **Multi-source discovery rollout** (issue #12) — expected to lift findable rate substantially for the `not_in_crossref` 32.8%.
+3. **Expand scope beyond top-50 ISSNs** — full corpus is ~204K IA items vs the 16K sampled here. Cache infrastructure built today (`tmp/ia_metadata_cache/`, `crossref_full_cache_v2/`) makes this incremental.
+4. **`wrong_voliss` matcher tweaks** in `label_matches` — combined-issue + supplement + season normalization.
+
+## Wrong-start-leaf fix — 2026-05-22
+
+Manual QA on the v1.0.3 calibration set (Google Sheet tab v1.0.3, 24 items) showed
+8 entries across 7 issues with notes like "Wrong start n number. Page numbers
+correct - misses first page." Root cause traced to `repair_page_numbers.extract_anchors`:
+docling running headers carry the *article's* range ("Author et al. | Journal
+120 (2004) 1-10") which the extractor was interpreting as "this leaf is page 1."
+On items where the chapter-open leaf has no detectable single page number, this
+puts page 1 → leaf 5 instead of leaf 4 (off by 1).
+
+**Fix:** `extract_anchors` now also captures bare-digit page_header blocks
+("2", "3", …) as `kind="single"` anchors — the leaf's actual printed page
+number. `consistency_filter` prefers singles when ≥3 share an offset, else
+falls back to range anchors (preserved for items like jognn that only have
+running headers, no single-number page_headers).
+
+**A/B verification (24 items, baseline `tmp/tocs_fixed/` vs. patched):**
+
+- 17 entries shifted (matched by DOI/title across renumbered entries).
+- 6 are direct librarian-gold matches on previously-held entries:
+  `bio-cons_2004-11_120_1_0` (pp 1-10), `bio-cons_2004-08_118_5` (pp 559-571),
+  `personality-and-individual-differences` (pp 775-784), `human-comm-research`
+  (pp 157-206), `child-psych_52_6` (pp 557-558), `bio-cons_2013-10_166`
+  (pp 303-303).
+- Most remaining shifts were verified via docling content as improvements
+  (including 2 end-of-article references-recovery shifts on `bio-cons_1990_51_1`
+  and a misplaced-Crossref-data fix on `jognn` "Your Right/Write to Appeal").
+- **Known regression on `ans_1978-10_1_1` "From the editor" (held item):** baseline
+  n6-n9 was librarian-confirmed correct (docling shows the article body opens at
+  n6); patched gives n14-n14 (wrong — n14 is "A Model for Theory Development").
+  Root cause: `ans_1978` is restart-pagination, so the pipeline bypasses pn.json
+  and trusts docling. With the patch, docling-singles' offset (13, derived from
+  later articles) overrides the range-anchor offset (4) that previously gave the
+  correct leaf for the first article. The pn_health gate already marks this item
+  as restart-pagination but doesn't currently gate it OUT of heur_xref.
+
+A separate test changing the scandata/docling/pn.json merge order to put
+scandata first regressed `ans_1978` even more broadly. Per-journal source
+quality varies; no fixed dominance order is correct globally.
+
+**Open question:** add a restart-pagination guard to the patch (revert to range-
+anchor behavior when pn_health says restart) OR build the v2 issue confidence
+score so restart-pagination items are gated to LLM before they reach heur_xref.

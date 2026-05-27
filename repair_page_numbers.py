@@ -33,6 +33,10 @@ ITEMS = SEGART / "tmp" / "items"
 # both sides so we don't grab volume-issue tokens like "10(1)" or "1987".
 PAGE_RANGE_RE = re.compile(r"(?<!\d)(\d{1,4})\s*[-–—]\s*(\d{1,4})(?!\d)")
 
+# A bare page-number token: the leaf's actual printed page number. Picked up
+# from page_header / page_footer blocks that contain only digits.
+SINGLE_PAGE_RE = re.compile(r"^\s*(\d{1,4})\s*$")
+
 
 def load_docling(item):
     p = ITEMS / item / f"{item}_docling.json.gz"
@@ -42,9 +46,20 @@ def load_docling(item):
 
 
 def extract_anchors(doc):
-    """Return list of (leaf, printed_page_start, printed_page_end, source_text)
-    where each entry comes from a page_header / page_footer with a credible
-    page-range token."""
+    """Return list of {leaf, start_page, end_page, text, kind} where each
+    entry comes from a page_header / page_footer block.
+
+    Two kinds of anchors are extracted:
+      - "single": the block text is just a page number (e.g. "2", "157").
+        This is the leaf's actual printed page number — unambiguous.
+      - "range": the block text contains an "<a>-<b>" pattern (e.g. running
+        header "Author et al. | Journal 120 (2004) 1-10"). This is the
+        *article's* printed range, not the leaf's page; it produces
+        off-by-N errors when the chapter-open leaf is unprinted (singles
+        for that leaf are missing, so the range header's "1-10" gets
+        misread as "this leaf is page 1"). Kept as a fallback signal for
+        items with no single-number page_headers.
+    """
     out = []
     for t in doc.get("texts") or []:
         label = t.get("label")
@@ -57,25 +72,51 @@ def extract_anchors(doc):
         # docling page_no is 1-indexed; the legacy leaf coordinate is
         # 0-indexed (see segment_issue_docling.py:739 / llm_toc_to_legacy.py).
         leaf = page_no - 1
-        # Find candidate page ranges. Reject tokens whose first num looks
-        # like a year (4 digits starting with 19/20). Prefer ranges where
-        # both numbers are <= 4 digits and end > start.
+
+        # Single-number page header: leaf's actual printed page number.
+        ms = SINGLE_PAGE_RE.match(text)
+        if ms:
+            n = int(ms.group(1))
+            if 1 <= n <= 9999 and not (1900 <= n <= 2100):
+                out.append({"leaf": leaf, "start_page": n, "end_page": n,
+                            "text": text, "kind": "single"})
+                continue
+
+        # Range form (running header with article range). Reject tokens
+        # whose first num looks like a year (4 digits in 1900-2100).
         for m in PAGE_RANGE_RE.finditer(text):
             s, e = int(m.group(1)), int(m.group(2))
-            # Reject year-like tokens.
             if 1900 <= s <= 2100 or 1900 <= e <= 2100: continue
             if e < s or e - s > 200: continue  # implausible spans
             out.append({"leaf": leaf, "start_page": s, "end_page": e,
-                        "text": text})
+                        "text": text, "kind": "range"})
             break  # one per page_header item is plenty
     return out
 
 
 def consistency_filter(anchors):
-    """Drop anchors whose offset (leaf - start_page) is a singleton when
-    other offsets have ≥2 support. If every offset is singleton, reject
-    all anchors (the running headers are noise). With ≤1 anchor, accept
-    as-is."""
+    """Filter anchors to a consistent-offset set.
+
+    Strategy:
+      - If ≥3 single-number anchors survive offset-consistency (i.e. share
+        an offset), use ONLY singles. Mixing in a surviving range anchor
+        hijacks page_to_leaf via build_repaired_map's setdefault sort
+        order — range anchors have sp=range_start (often 1), which beats
+        singles' sp inside the article and writes the wrong leaf for the
+        first page.
+      - Otherwise fall back to all anchors and apply the consistency
+        filter (offset count ≥ 2). This handles items that have no
+        single-number page_headers, only running-header ranges (jognn-
+        style), where the range anchors are the only signal we have.
+    """
+    singles = [a for a in anchors if a.get("kind") == "single"]
+    if len(singles) >= 3:
+        offsets = Counter(a["leaf"] - a["start_page"] for a in singles)
+        if max(offsets.values(), default=0) >= 2:
+            well = {o for o, c in offsets.items() if c >= 2}
+            kept = [a for a in singles if (a["leaf"] - a["start_page"]) in well]
+            if len(kept) >= 3:
+                return kept
     if len(anchors) <= 1:
         return anchors
     offsets = Counter(a["leaf"] - a["start_page"] for a in anchors)
